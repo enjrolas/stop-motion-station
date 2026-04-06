@@ -931,9 +931,10 @@ export default function applicationStore(state, emitter) {
   function updateTimelineScrollTargetAndClampCurrentOffset() {
     updateVisibleTimelineScrollTargetFromFocusedTimelineItem();
 
+    const maximumTimelinePosition = state.frames.length * 2;
     const maximumTimelineScrollOffset = Math.max(
       0,
-      (state.frames.length * 2) - state.visibleTimelineItemCount,
+      (maximumTimelinePosition + 1) - Math.max(1, state.visibleTimelineItemCount),
     );
     state.timelineScrollOffsetInItemUnits = Math.min(
       maximumTimelineScrollOffset,
