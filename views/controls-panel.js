@@ -6,7 +6,7 @@ export default function controlsPanel(state) {
     : "Auto-capture is ready.";
   const captureIsReady = state.captureReadinessStatus === "capture-ready";
   const captureReadinessStatusMessage = captureIsReady
-    ? "Capture ready. Press Space to take a picture."
+    ? "Capture ready. Press Space or B3 to take a picture."
     : "Busy saving the most recent frame. New captures are temporarily blocked.";
 
   return html`
@@ -17,7 +17,7 @@ export default function controlsPanel(state) {
           ${automaticCaptureStatusMessage}
         </div>
         <div class="auto-capture-shortcut-hint">
-          Press and release Up and Space together to start auto-capture. Press any other key to stop.
+          Press and release Up + Space or Play + Capture together to start auto-capture.
         </div>
       </section>
       <section class="capture-readiness-indicator-panel">
@@ -30,13 +30,13 @@ export default function controlsPanel(state) {
         </div>
       </section>
       <section class="keyboard-controls-panel">
-        <div class="keyboard-controls-title">Keyboard controls</div>
+        <div class="keyboard-controls-title">Controls</div>
         <ul class="keyboard-controls-list">
-          <li>space for capture</li>
-          <li>up for play</li>
-          <li>down/delete/backspace for delete</li>
-          <li>esc/w for back to browser</li>
-          <li>arrows to navigate timeline</li>
+          <li>space / B3 capture</li>
+          <li>up / B5 play</li>
+          <li>left/right / B1 B2 previous/next</li>
+          <li>esc/w / B0 back</li>
+          <li>down/delete/backspace / B4 delete</li>
           <li>shift + left/right to reorder a selected frame</li>
         </ul>
       </section>

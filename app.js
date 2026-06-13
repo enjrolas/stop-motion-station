@@ -21,11 +21,19 @@ import {
   createDefaultProjectTitle,
   clampSelectionIndex,
 } from "./helpers/project-browser-operations.js";
+import {
+  GAMEPAD_ACTIONS,
+  getGamepadActionForButton,
+  isGamepadButtonPressed,
+  isMappedGamepadButton,
+} from "./helpers/gamepad-controls.js";
 import { computeProjectBrowserColumnCount } from "./views/project-browser.js";
 
 const ENABLE_KEYBOARD_DEBUG_LOGGING = false;
+const ENABLE_GAMEPAD_DEBUG_LOGGING = false;
 const ENABLE_CAMERA_STARTUP_DEBUG_LOGGING = false;
 let hasAttachedGlobalKeyboardListener = false;
+let hasAttachedGamepadListener = false;
 const THREE_SECOND_COUNTDOWN_SECONDS = 3;
 const automaticCaptureMetronomeSound = new Audio(new URL("./assets/sound/metronome-tick.wav", import.meta.url).href);
 const pictureShutterClickSound = new Audio(new URL("./assets/sound/shutter-click.wav", import.meta.url).href);
@@ -228,14 +236,212 @@ function scheduleAutomaticCameraStartup({ state, emitter }) {
   }, 300);
 }
 
+function createShortcutControllerState() {
+  return {
+    automaticCaptureShortcutWasPressed: false,
+    currentlyPressedKeys: new Set(),
+  };
+}
+
+function normalizeShortcutInput({ key, code = "", shiftKey = false }) {
+  const isSpace =
+    code === "Space"
+    || key === " "
+    || key === "Spacebar"
+    || key === "Space";
+
+  return {
+    key,
+    code,
+    shiftKey,
+    pressedKey: isSpace ? "Space" : key,
+    isSpace,
+    isArrowUp: key === "ArrowUp",
+    isBackOrEscape: key === "Escape" || key === "w" || key === "W",
+    isDelete: key === "ArrowDown" || key === "Backspace" || key === "Delete",
+  };
+}
+
+function updateAutomaticCaptureShortcutState({ state, controllerState }) {
+  const isHoldingPlayAndRecordShortcut = controllerState.currentlyPressedKeys.has("ArrowUp")
+    && controllerState.currentlyPressedKeys.has("Space");
+
+  if (state.appMode !== "project-editor") {
+    return;
+  }
+
+  if (isHoldingPlayAndRecordShortcut) {
+    controllerState.automaticCaptureShortcutWasPressed = true;
+  }
+}
+
+function handleShortcutPress({ state, emitter, controllerState, shortcut, log }) {
+  controllerState.currentlyPressedKeys.add(shortcut.pressedKey);
+
+  log("shortcut press", {
+    key: shortcut.key,
+    code: shortcut.code,
+    appMode: state.appMode,
+  });
+
+  const isHoldingPlayAndRecordShortcut = controllerState.currentlyPressedKeys.has("ArrowUp")
+    && controllerState.currentlyPressedKeys.has("Space");
+
+  if (isHoldingPlayAndRecordShortcut && state.appMode === "project-editor") {
+    updateAutomaticCaptureShortcutState({ state, controllerState });
+    return true;
+  }
+
+  if (state.appMode === "project-editor" && state.isTimelapseCapturing) {
+    log("ACTION: stop auto-capture because another shortcut was pressed");
+    emitter.emit("timelapse:stop");
+  }
+
+  if (state.appMode === "project-browser") {
+    if (shortcut.isBackOrEscape && state.projectBrowserModalProjectId) {
+      emitter.emit("project-browser:close-project-modal");
+      return true;
+    }
+
+    if (state.projectBrowserModalProjectId) {
+      if (shortcut.key === "ArrowLeft" || shortcut.key === "ArrowUp") {
+        emitter.emit("project-browser:move-modal-selection-previous");
+        return true;
+      }
+
+      if (shortcut.key === "ArrowRight" || shortcut.key === "ArrowDown") {
+        emitter.emit("project-browser:move-modal-selection-next");
+        return true;
+      }
+
+      if (shortcut.isSpace) {
+        emitter.emit("project-browser:activate-selected-modal-action");
+        return true;
+      }
+
+      log("UNHANDLED PROJECT BROWSER MODAL SHORTCUT", shortcut.key);
+      return false;
+    }
+
+    if (shortcut.key === "ArrowLeft") {
+      emitter.emit("project-browser:move-selection-left");
+      return true;
+    }
+
+    if (shortcut.key === "ArrowRight") {
+      emitter.emit("project-browser:move-selection-right");
+      return true;
+    }
+
+    if (shortcut.key === "ArrowUp") {
+      emitter.emit("project-browser:move-selection-up");
+      return true;
+    }
+
+    if (shortcut.key === "ArrowDown") {
+      emitter.emit("project-browser:move-selection-down");
+      return true;
+    }
+
+    if (shortcut.isSpace) {
+      emitter.emit("project-browser:activate-selected-tile");
+      return true;
+    }
+
+    log("UNHANDLED PROJECT BROWSER SHORTCUT", shortcut.key);
+    return false;
+  }
+
+  if (shortcut.isBackOrEscape) {
+    emitter.emit("project-editor:return-to-browser");
+    return true;
+  }
+
+  if (shortcut.isSpace) {
+    log("ACTION: capture frame");
+    emitter.emit("frames:capture");
+    return true;
+  }
+
+  if (shortcut.key === "ArrowLeft") {
+    if (shortcut.shiftKey) {
+      log("ACTION: move selected frame left");
+      emitter.emit("timeline:move-selected-frame-left");
+      return true;
+    }
+
+    log("ACTION: move selection left");
+    emitter.emit("timeline:move-selection-left");
+    return true;
+  }
+
+  if (shortcut.key === "ArrowRight") {
+    if (shortcut.shiftKey) {
+      log("ACTION: move selected frame right");
+      emitter.emit("timeline:move-selected-frame-right");
+      return true;
+    }
+
+    log("ACTION: move selection right");
+    emitter.emit("timeline:move-selection-right");
+    return true;
+  }
+
+  if (shortcut.isArrowUp) {
+    log("ACTION: play");
+    emitter.emit("playback:start");
+    return true;
+  }
+
+  if (shortcut.isDelete) {
+    log("ACTION: delete");
+    emitter.emit("frames:delete-selected");
+    return true;
+  }
+
+  log("UNHANDLED SHORTCUT", shortcut.key);
+  return false;
+}
+
+function handleShortcutRelease({ state, emitter, controllerState, shortcut, log }) {
+  controllerState.currentlyPressedKeys.delete(shortcut.pressedKey);
+
+  if (state.appMode !== "project-editor") {
+    return false;
+  }
+
+  if (shortcut.isSpace || shortcut.isArrowUp) {
+    updateAutomaticCaptureShortcutState({ state, controllerState });
+  }
+
+  const automaticCaptureShortcutIsFullyReleased = !controllerState.currentlyPressedKeys.has("ArrowUp")
+    && !controllerState.currentlyPressedKeys.has("Space");
+
+  if (
+    controllerState.automaticCaptureShortcutWasPressed
+    && automaticCaptureShortcutIsFullyReleased
+    && !state.isTimelapseCapturing
+  ) {
+    log("ACTION: toggle auto-capture on after shortcut press-and-release");
+    controllerState.automaticCaptureShortcutWasPressed = false;
+    emitter.emit("timelapse:start");
+    return true;
+  }
+
+  if (automaticCaptureShortcutIsFullyReleased) {
+    controllerState.automaticCaptureShortcutWasPressed = false;
+  }
+
+  return false;
+}
+
 function attachGlobalKeyboardListener(state, emitter) {
   if (hasAttachedGlobalKeyboardListener) {
     return;
   }
 
   hasAttachedGlobalKeyboardListener = true;
-  const currentlyPressedKeys = new Set();
-  let automaticCaptureShortcutWasPressed = false;
+  const controllerState = createShortcutControllerState();
 
   function log(...args) {
     if (ENABLE_KEYBOARD_DEBUG_LOGGING) {
@@ -243,234 +449,40 @@ function attachGlobalKeyboardListener(state, emitter) {
     }
   }
 
-  function normalizeKeyboardInput(event) {
-    const key = event.key;
-    const code = event.code;
-    const isSpace =
-      code === "Space"
-      || key === " "
-      || key === "Spacebar"
-      || key === "Space";
-
-    return {
-      key,
-      code,
-      isSpace,
-      isArrowUp: key === "ArrowUp",
-    };
-  }
-
-  function updateAutomaticCaptureShortcutState() {
-    const isHoldingPlayAndRecordShortcut = currentlyPressedKeys.has("ArrowUp")
-      && currentlyPressedKeys.has("Space");
-
-    if (state.appMode !== "project-editor") {
-      return;
-    }
-
-    if (isHoldingPlayAndRecordShortcut) {
-      automaticCaptureShortcutWasPressed = true;
-    }
-  }
-
   function handleKeyboardShortcuts(event) {
-    const normalizedKeyboardInput = normalizeKeyboardInput(event);
-    const { key, code, isSpace, isArrowUp } = normalizedKeyboardInput;
-
-    if (isSpace) {
-      currentlyPressedKeys.add("Space");
-    } else {
-      currentlyPressedKeys.add(key);
-    }
-
-    log("keydown event received", {
-      key,
-      code,
-      repeat: event.repeat,
-      activeElement: document.activeElement?.tagName,
-      appMode: state.appMode,
+    const shortcut = normalizeShortcutInput({
+      key: event.key,
+      code: event.code,
+      shiftKey: event.shiftKey,
     });
 
-    const isHoldingPlayAndRecordShortcut = currentlyPressedKeys.has("ArrowUp")
-      && currentlyPressedKeys.has("Space");
+    const handled = handleShortcutPress({
+      state,
+      emitter,
+      controllerState,
+      shortcut,
+      log,
+    });
 
-    if (isHoldingPlayAndRecordShortcut && state.appMode === "project-editor") {
+    if (handled) {
       event.preventDefault();
-      updateAutomaticCaptureShortcutState();
-      return;
     }
-
-    if (state.appMode === "project-editor" && state.isTimelapseCapturing) {
-      log("ACTION: stop auto-capture because another key was pressed");
-      emitter.emit("timelapse:stop");
-    }
-
-    if (state.appMode === "project-browser") {
-      const shouldCloseProjectBrowserModal = key === "Escape" || key === "w" || key === "W";
-
-      if (shouldCloseProjectBrowserModal && state.projectBrowserModalProjectId) {
-        event.preventDefault();
-        emitter.emit("project-browser:close-project-modal");
-        return;
-      }
-
-      if (state.projectBrowserModalProjectId) {
-        if (key === "ArrowLeft" || key === "ArrowUp") {
-          event.preventDefault();
-          emitter.emit("project-browser:move-modal-selection-previous");
-          return;
-        }
-
-        if (key === "ArrowRight" || key === "ArrowDown") {
-          event.preventDefault();
-          emitter.emit("project-browser:move-modal-selection-next");
-          return;
-        }
-
-        if (isSpace) {
-          event.preventDefault();
-          emitter.emit("project-browser:activate-selected-modal-action");
-          return;
-        }
-
-        log("UNHANDLED PROJECT BROWSER MODAL KEY", key);
-        return;
-      }
-
-      if (key === "ArrowLeft") {
-        event.preventDefault();
-        emitter.emit("project-browser:move-selection-left");
-        return;
-      }
-
-      if (key === "ArrowRight") {
-        event.preventDefault();
-        emitter.emit("project-browser:move-selection-right");
-        return;
-      }
-
-      if (key === "ArrowUp") {
-        event.preventDefault();
-        emitter.emit("project-browser:move-selection-up");
-        return;
-      }
-
-      if (key === "ArrowDown") {
-        event.preventDefault();
-        emitter.emit("project-browser:move-selection-down");
-        return;
-      }
-
-      if (isSpace) {
-        event.preventDefault();
-        emitter.emit("project-browser:activate-selected-tile");
-        return;
-      }
-
-      log("UNHANDLED PROJECT BROWSER KEY", key);
-      return;
-    }
-
-    const shouldReturnToProjectBrowser = key === "Escape" || key === "w" || key === "W";
-
-    if (shouldReturnToProjectBrowser) {
-      event.preventDefault();
-      emitter.emit("project-editor:return-to-browser");
-      return;
-    }
-
-    if (isSpace) {
-      log("ACTION: capture frame");
-      event.preventDefault();
-      emitter.emit("frames:capture");
-      return;
-    }
-
-    if (key === "ArrowLeft") {
-      event.preventDefault();
-
-      if (event.shiftKey) {
-        log("ACTION: move selected frame left");
-        emitter.emit("timeline:move-selected-frame-left");
-        return;
-      }
-
-      log("ACTION: move selection left");
-      emitter.emit("timeline:move-selection-left");
-      return;
-    }
-
-    if (key === "ArrowRight") {
-      event.preventDefault();
-
-      if (event.shiftKey) {
-        log("ACTION: move selected frame right");
-        emitter.emit("timeline:move-selected-frame-right");
-        return;
-      }
-
-      log("ACTION: move selection right");
-      emitter.emit("timeline:move-selection-right");
-      return;
-    }
-
-    if (isArrowUp) {
-      log("ACTION: play");
-      event.preventDefault();
-      emitter.emit("playback:start");
-      return;
-    }
-
-    const shouldDeleteSelectedFrame =
-      key === "ArrowDown" ||
-      key === "Backspace" ||
-      key === "Delete";
-
-    if (shouldDeleteSelectedFrame) {
-      log("ACTION: delete");
-      event.preventDefault();
-      emitter.emit("frames:delete-selected");
-      return;
-    }
-
-    log("UNHANDLED KEY", key);
   }
 
   function handleKeyboardShortcutRelease(event) {
-    const normalizedKeyboardInput = normalizeKeyboardInput(event);
-    const { key, isSpace, isArrowUp } = normalizedKeyboardInput;
+    const shortcut = normalizeShortcutInput({
+      key: event.key,
+      code: event.code,
+      shiftKey: event.shiftKey,
+    });
 
-    if (isSpace) {
-      currentlyPressedKeys.delete("Space");
-    } else {
-      currentlyPressedKeys.delete(key);
-    }
-
-    if (state.appMode !== "project-editor") {
-      return;
-    }
-
-    if (isSpace || isArrowUp) {
-      updateAutomaticCaptureShortcutState();
-    }
-
-    const automaticCaptureShortcutIsFullyReleased = !currentlyPressedKeys.has("ArrowUp")
-      && !currentlyPressedKeys.has("Space");
-
-    if (
-      automaticCaptureShortcutWasPressed
-      && automaticCaptureShortcutIsFullyReleased
-      && !state.isTimelapseCapturing
-    ) {
-      log("ACTION: toggle auto-capture on after shortcut press-and-release");
-      automaticCaptureShortcutWasPressed = false;
-      emitter.emit("timelapse:start");
-      return;
-    }
-
-    if (automaticCaptureShortcutIsFullyReleased) {
-      automaticCaptureShortcutWasPressed = false;
-    }
+    handleShortcutRelease({
+      state,
+      emitter,
+      controllerState,
+      shortcut,
+      log,
+    });
   }
 
   log("Attaching keyboard listeners");
@@ -510,9 +522,165 @@ function attachGlobalKeyboardListener(state, emitter) {
   });
 }
 
+function attachGamepadListener(state, emitter) {
+  if (hasAttachedGamepadListener || typeof navigator === "undefined" || !navigator.getGamepads) {
+    return;
+  }
+
+  hasAttachedGamepadListener = true;
+  const controllerState = createShortcutControllerState();
+  const pressedButtonIndexesByGamepadIndex = new Map();
+  const pressedShortcutsByButtonIdentifier = new Map();
+
+  function log(...args) {
+    if (ENABLE_GAMEPAD_DEBUG_LOGGING) {
+      console.log("[GAMEPAD]", ...args);
+    }
+  }
+
+  function createButtonIdentifier(gamepadIndex, buttonIndex) {
+    return `${gamepadIndex}:${buttonIndex}`;
+  }
+
+  function getShortcutForGamepadAction(gamepadAction, buttonIndex) {
+    const keyboardKeyByGamepadAction = new Map([
+      [GAMEPAD_ACTIONS.back, "Escape"],
+      [GAMEPAD_ACTIONS.previous, "ArrowLeft"],
+      [GAMEPAD_ACTIONS.next, "ArrowRight"],
+      [GAMEPAD_ACTIONS.capture, "Space"],
+      [GAMEPAD_ACTIONS.delete, "Delete"],
+      [GAMEPAD_ACTIONS.play, "ArrowUp"],
+    ]);
+    const keyboardKey = keyboardKeyByGamepadAction.get(gamepadAction);
+
+    return normalizeShortcutInput({
+      key: keyboardKey,
+      code: `GamepadButton${buttonIndex}`,
+    });
+  }
+
+  function handleGamepadButtonDown(gamepadIndex, buttonIndex) {
+    const gamepadAction = getGamepadActionForButton(buttonIndex);
+
+    if (!gamepadAction) {
+      return;
+    }
+
+    if (state.appMode === "project-browser" && state.projectBrowserModalProjectId) {
+      if (gamepadAction === GAMEPAD_ACTIONS.play) {
+        emitter.emit("project-browser:play-modal-project");
+        return;
+      }
+
+      if (gamepadAction === GAMEPAD_ACTIONS.delete) {
+        emitter.emit("project-browser:delete-modal-project");
+        return;
+      }
+    }
+
+    if (state.appMode === "project-browser" && gamepadAction === GAMEPAD_ACTIONS.play) {
+      return;
+    }
+
+    if (state.appMode === "project-browser" && gamepadAction === GAMEPAD_ACTIONS.delete) {
+      return;
+    }
+
+    const shortcut = getShortcutForGamepadAction(gamepadAction, buttonIndex);
+
+    pressedShortcutsByButtonIdentifier.set(
+      createButtonIdentifier(gamepadIndex, buttonIndex),
+      shortcut,
+    );
+
+    handleShortcutPress({
+      state,
+      emitter,
+      controllerState,
+      shortcut,
+      log,
+    });
+  }
+
+  function handleGamepadButtonUp(gamepadIndex, buttonIndex) {
+    const buttonIdentifier = createButtonIdentifier(gamepadIndex, buttonIndex);
+    const shortcut = pressedShortcutsByButtonIdentifier.get(buttonIdentifier)
+      ?? null;
+
+    pressedShortcutsByButtonIdentifier.delete(buttonIdentifier);
+
+    if (!shortcut) {
+      return;
+    }
+
+    handleShortcutRelease({
+      state,
+      emitter,
+      controllerState,
+      shortcut,
+      log,
+    });
+  }
+
+  function releaseDisconnectedGamepadButtons(gamepadIndex) {
+    const previouslyPressedButtonIndexes = pressedButtonIndexesByGamepadIndex.get(gamepadIndex);
+
+    if (!previouslyPressedButtonIndexes) {
+      return;
+    }
+
+    for (const buttonIndex of previouslyPressedButtonIndexes) {
+      handleGamepadButtonUp(gamepadIndex, buttonIndex);
+    }
+
+    pressedButtonIndexesByGamepadIndex.delete(gamepadIndex);
+  }
+
+  function pollGamepads() {
+    const gamepads = navigator.getGamepads();
+
+    for (const gamepad of gamepads) {
+      if (!gamepad) {
+        continue;
+      }
+
+      const previouslyPressedButtonIndexes = pressedButtonIndexesByGamepadIndex.get(gamepad.index)
+        ?? new Set();
+      const currentlyPressedButtonIndexes = new Set();
+
+      for (let buttonIndex = 0; buttonIndex < gamepad.buttons.length; buttonIndex += 1) {
+        if (!isMappedGamepadButton(buttonIndex)) {
+          continue;
+        }
+
+        if (isGamepadButtonPressed(gamepad.buttons[buttonIndex])) {
+          currentlyPressedButtonIndexes.add(buttonIndex);
+
+          if (!previouslyPressedButtonIndexes.has(buttonIndex)) {
+            handleGamepadButtonDown(gamepad.index, buttonIndex);
+          }
+        } else if (previouslyPressedButtonIndexes.has(buttonIndex)) {
+          handleGamepadButtonUp(gamepad.index, buttonIndex);
+        }
+      }
+
+      pressedButtonIndexesByGamepadIndex.set(gamepad.index, currentlyPressedButtonIndexes);
+    }
+
+    window.requestAnimationFrame(pollGamepads);
+  }
+
+  window.addEventListener("gamepaddisconnected", (gamepadEvent) => {
+    releaseDisconnectedGamepadButtons(gamepadEvent.gamepad.index);
+  });
+
+  window.requestAnimationFrame(pollGamepads);
+}
+
 export default function applicationStore(state, emitter) {
   Object.assign(state, createInitialApplicationState());
   attachGlobalKeyboardListener(state, emitter);
+  attachGamepadListener(state, emitter);
 
   let animationFrameIdentifierForTimelineScroll = null;
   let automaticCaptureTimeoutIdentifier = null;

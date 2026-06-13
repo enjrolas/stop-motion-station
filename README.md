@@ -1,12 +1,12 @@
 # Stop Motion Station
 
-Stop Motion Station is a browser-based stop-motion capture station designed for a keyboard-first, kiosk-friendly workflow. It captures frames from the browser camera stream, stores projects in the browser Origin Private File System, and plays captured frames back as a quick animation preview.
+Stop Motion Station is a browser-based stop-motion capture station designed for a keyboard- and gamepad-friendly kiosk workflow. It captures frames from the browser camera stream, stores projects in the browser Origin Private File System, and plays captured frames back as a quick animation preview.
 
 ## Current application shape
 
 - `index.html` loads the vendored browser libraries and the module entry point.
 - `index.js` creates the Choo application, installs the application store, routes every path to the main view, mounts the application, and emits the startup event.
-- `app.js` owns application state transitions, keyboard shortcuts, project persistence, frame capture, auto-capture, playback, and layout updates.
+- `app.js` owns application state transitions, keyboard and gamepad shortcuts, project persistence, frame capture, auto-capture, playback, and layout updates.
 - `views/` contains the project browser, camera preview, controls panel, and timeline panel.
 - `services/` contains camera, frame storage, project storage, and playback service objects.
 - `helpers/` contains pure operations for frame editing, project browser selection, layout, and frame identifiers.
@@ -42,7 +42,7 @@ npm test
 
 The current automated tests cover pure helper behavior. Browser-only behavior such as camera access, canvas encoding, audio playback, and Origin Private File System persistence still needs manual browser validation.
 
-## Keyboard controls
+## Controls
 
 ### Project browser
 
@@ -62,6 +62,17 @@ The current automated tests cover pure helper behavior. Browser-only behavior su
 - Press and release Up and Space together to start auto-capture.
 - Press any other key during auto-capture to stop it.
 - Escape or W returns to the project browser.
+
+### Generic USB joystick
+
+- B0 maps to Back.
+- B5 maps to Play.
+- B1 maps to Previous.
+- B2 maps to Next.
+- B4 maps to Delete.
+- B3 maps to Capture / confirm.
+- Press and release Play and Capture together to start auto-capture.
+- Press any other mapped gamepad button during auto-capture to stop it.
 
 ## Manual browser smoke test
 
