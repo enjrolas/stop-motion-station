@@ -23,8 +23,8 @@ import {
 } from "./helpers/project-browser-operations.js";
 import { computeProjectBrowserColumnCount } from "./views/project-browser.js";
 
-const ENABLE_KEYBOARD_DEBUG_LOGGING = true;
-const ENABLE_CAMERA_STARTUP_DEBUG_LOGGING = true;
+const ENABLE_KEYBOARD_DEBUG_LOGGING = false;
+const ENABLE_CAMERA_STARTUP_DEBUG_LOGGING = false;
 let hasAttachedGlobalKeyboardListener = false;
 const THREE_SECOND_COUNTDOWN_SECONDS = 3;
 const automaticCaptureMetronomeSound = new Audio(new URL("./assets/sound/metronome-tick.wav", import.meta.url).href);
@@ -387,15 +387,29 @@ function attachGlobalKeyboardListener(state, emitter) {
     }
 
     if (key === "ArrowLeft") {
-      log("ACTION: move left");
       event.preventDefault();
+
+      if (event.shiftKey) {
+        log("ACTION: move selected frame left");
+        emitter.emit("timeline:move-selected-frame-left");
+        return;
+      }
+
+      log("ACTION: move selection left");
       emitter.emit("timeline:move-selection-left");
       return;
     }
 
     if (key === "ArrowRight") {
-      log("ACTION: move right");
       event.preventDefault();
+
+      if (event.shiftKey) {
+        log("ACTION: move selected frame right");
+        emitter.emit("timeline:move-selected-frame-right");
+        return;
+      }
+
+      log("ACTION: move selection right");
       emitter.emit("timeline:move-selection-right");
       return;
     }
