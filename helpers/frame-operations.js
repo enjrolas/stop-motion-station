@@ -51,15 +51,24 @@ export function ensureTimelineSelectionIsVisible({
   frameCount,
 }) {
   const selectedTimelinePosition = getSelectionPositionOnTimeline(selectedTimelineItem);
-  const centeredTimelineScrollOffset = selectedTimelinePosition - (visibleTimelineItemCount / 2);
-  const maximumTimelineScrollOffset = Math.max(0, (frameCount * 2) - visibleTimelineItemCount);
-
-  return Math.min(
-    maximumTimelineScrollOffset,
-    Math.max(0, Number.isFinite(centeredTimelineScrollOffset)
-      ? centeredTimelineScrollOffset
-      : currentTimelineScrollOffsetInItemUnits),
+  const safeVisibleTimelineItemCount = Math.max(1, visibleTimelineItemCount);
+  const maximumTimelinePosition = frameCount * 2;
+  const maximumTimelineScrollOffset = Math.max(
+    0,
+    (maximumTimelinePosition + 1) - safeVisibleTimelineItemCount,
   );
+  const currentVisibleTimelineStart = Math.max(0, currentTimelineScrollOffsetInItemUnits);
+  const currentVisibleTimelineEnd = currentVisibleTimelineStart + safeVisibleTimelineItemCount - 1;
+
+  let nextTimelineScrollOffset = currentVisibleTimelineStart;
+
+  if (selectedTimelinePosition < currentVisibleTimelineStart) {
+    nextTimelineScrollOffset = selectedTimelinePosition;
+  } else if (selectedTimelinePosition > currentVisibleTimelineEnd) {
+    nextTimelineScrollOffset = selectedTimelinePosition - (safeVisibleTimelineItemCount - 1);
+  }
+
+  return Math.min(maximumTimelineScrollOffset, Math.max(0, nextTimelineScrollOffset));
 }
 
 function createFrameRecord({
