@@ -5,8 +5,8 @@ This folder contains the early setup pieces for running Stop Motion Station as a
 The goal is:
 
 1. Boot Raspberry Pi OS into the graphical desktop.
-2. Start a local static server for this repository.
-3. Launch Chromium in kiosk mode pointed at the local application URL.
+2. Start a local static server for this repository, or skip the server and use the GitHub Pages deployment.
+3. Launch Chromium in kiosk mode pointed at the application URL.
 4. Keep the display awake.
 5. Make the setup easy to reinstall on a fresh Pi.
 
@@ -16,7 +16,7 @@ The goal is:
 - Raspberry Pi Camera or another camera exposed to Chromium through the operating system camera stack.
 - Keyboard or dedicated button controller that can emit the app's keyboard shortcuts.
 - Display connected to the Pi.
-- Python 3 for the kiosk launcher's local static server.
+- Python 3 for the kiosk launcher's local static server. Remote mode does not need Python.
 
 ## First-time operating system setup
 
@@ -36,16 +36,27 @@ raspberry-pi/scripts/install-kiosk-mode.sh
 
 The generated kiosk launcher reads these environment variables if they are set before launch:
 
+- `STOP_MOTION_STATION_RUN_MODE`: `local` or `remote`. Defaults to `local`.
 - `STOP_MOTION_STATION_ROOT`: repository path. Defaults to the current repository path recorded when the installer runs.
 - `STOP_MOTION_STATION_PORT`: local static server port. Defaults to `4173`.
-- `STOP_MOTION_STATION_URL`: Chromium URL. Defaults to `http://localhost:${STOP_MOTION_STATION_PORT}`.
+- `STOP_MOTION_STATION_URL`: local-mode Chromium URL. Defaults to `http://localhost:${STOP_MOTION_STATION_PORT}`.
+- `STOP_MOTION_STATION_REMOTE_URL`: remote-mode Chromium URL. Defaults to `https://wmacfarl.github.io/stop-motion-station/`.
 - `STOP_MOTION_STATION_CHROMIUM_PROFILE`: dedicated Chromium kiosk profile directory. Defaults to `~/.local/share/stop-motion-station/chromium-profile`.
 - `CHROMIUM_BINARY`: Chromium executable name. Defaults to `chromium-browser`, then falls back to `chromium`.
 
 ## Scripts
 
 - `scripts/install-kiosk-mode.sh` installs a user-level systemd service and a desktop autostart entry.
-- `scripts/launch-kiosk.sh` starts the local static server and Chromium kiosk session.
+- `scripts/launch-kiosk.sh` starts the local static server and Chromium kiosk session by default.
+- `scripts/launch-kiosk.sh --remote` skips the local server and opens `https://wmacfarl.github.io/stop-motion-station/`.
+- `scripts/launch-kiosk.sh --local` forces the local server mode.
+- `scripts/launch-kiosk.sh --url URL` opens a custom URL. In local mode, the local server still starts; in remote mode, no server starts.
+
+To install autostart in remote mode, set the run mode when installing:
+
+```sh
+STOP_MOTION_STATION_RUN_MODE=remote raspberry-pi/scripts/install-kiosk-mode.sh
+```
 
 ## Chromium profile and keyring prompts
 

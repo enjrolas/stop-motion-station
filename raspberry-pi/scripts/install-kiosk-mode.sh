@@ -20,6 +20,7 @@ After=graphical-session.target
 [Service]
 Type=simple
 Environment=STOP_MOTION_STATION_ROOT=${REPOSITORY_ROOT}
+Environment=STOP_MOTION_STATION_RUN_MODE=${STOP_MOTION_STATION_RUN_MODE:-local}
 ExecStart=${LAUNCH_SCRIPT_PATH}
 Restart=on-failure
 RestartSec=5
