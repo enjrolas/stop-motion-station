@@ -37,6 +37,7 @@ export default function controlsPanel(state) {
           <li>down/delete/backspace for delete</li>
           <li>esc/w for back to browser</li>
           <li>arrows to navigate timeline</li>
+          <li>shift + left/right to reorder a selected frame</li>
         </ul>
       </section>
     </aside>

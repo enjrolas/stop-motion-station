@@ -61,7 +61,10 @@ export default function projectBrowserView(state, emit) {
               return html`
                 <article
                   class=${`project-browser-tile new-project-tile ${isSelectedTile ? "is-selected" : ""}`}
-                  onclick=${selectProjectBrowserTile}
+                  onclick=${() => {
+                    selectProjectBrowserTile();
+                    emit("project-browser:activate-selected-tile");
+                  }}
                 >
                   <div class="project-browser-thumbnail-placeholder project-browser-thumbnail-plus">+</div>
                   <h2 class="project-browser-tile-title">${tileViewModel.title}</h2>
