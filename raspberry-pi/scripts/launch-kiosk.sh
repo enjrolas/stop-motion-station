@@ -7,6 +7,7 @@ REPOSITORY_ROOT="${STOP_MOTION_STATION_ROOT:-${DEFAULT_REPOSITORY_ROOT}}"
 APPLICATION_PORT="${STOP_MOTION_STATION_PORT:-4173}"
 APPLICATION_URL="${STOP_MOTION_STATION_URL:-http://localhost:${APPLICATION_PORT}}"
 CHROMIUM_BINARY="${CHROMIUM_BINARY:-chromium-browser}"
+CHROMIUM_PROFILE_DIRECTORY="${STOP_MOTION_STATION_CHROMIUM_PROFILE:-${HOME}/.local/share/stop-motion-station/chromium-profile}"
 
 if ! command -v "${CHROMIUM_BINARY}" >/dev/null 2>&1; then
   if command -v chromium >/dev/null 2>&1; then
@@ -18,6 +19,7 @@ if ! command -v "${CHROMIUM_BINARY}" >/dev/null 2>&1; then
 fi
 
 cd "${REPOSITORY_ROOT}"
+mkdir -p "${CHROMIUM_PROFILE_DIRECTORY}"
 
 python3 -m http.server "${APPLICATION_PORT}" --bind 127.0.0.1 &
 STATIC_SERVER_PROCESS_IDENTIFIER="$!"
@@ -35,6 +37,11 @@ fi
 
 exec "${CHROMIUM_BINARY}" \
   --kiosk \
+  --user-data-dir="${CHROMIUM_PROFILE_DIRECTORY}" \
+  --password-store=basic \
+  --no-first-run \
+  --disable-sync \
+  --disable-session-crashed-bubble \
   --noerrdialogs \
   --disable-infobars \
   --check-for-update-interval=31536000 \

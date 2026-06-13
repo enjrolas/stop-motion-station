@@ -39,11 +39,19 @@ The generated kiosk launcher reads these environment variables if they are set b
 - `STOP_MOTION_STATION_ROOT`: repository path. Defaults to the current repository path recorded when the installer runs.
 - `STOP_MOTION_STATION_PORT`: local static server port. Defaults to `4173`.
 - `STOP_MOTION_STATION_URL`: Chromium URL. Defaults to `http://localhost:${STOP_MOTION_STATION_PORT}`.
+- `STOP_MOTION_STATION_CHROMIUM_PROFILE`: dedicated Chromium kiosk profile directory. Defaults to `~/.local/share/stop-motion-station/chromium-profile`.
+- `CHROMIUM_BINARY`: Chromium executable name. Defaults to `chromium-browser`, then falls back to `chromium`.
 
 ## Scripts
 
 - `scripts/install-kiosk-mode.sh` installs a user-level systemd service and a desktop autostart entry.
 - `scripts/launch-kiosk.sh` starts the local static server and Chromium kiosk session.
+
+## Chromium profile and keyring prompts
+
+The launcher uses a dedicated Chromium profile and `--password-store=basic` so kiosk startup does not try to unlock the desktop keyring or reuse a normal browser profile.
+
+If Chromium still shows an authentication or keyring prompt, make sure you are launching through `raspberry-pi/scripts/launch-kiosk.sh` and not opening Chromium manually with the default profile.
 
 ## Notes and open tasks
 
