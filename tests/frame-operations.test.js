@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  MAXIMUM_PLAYBACK_FRAMES_PER_SECOND,
+  MINIMUM_PLAYBACK_FRAMES_PER_SECOND,
+  adjustPlaybackFramesPerSecond,
   canDeleteSelectedFrame,
   canPlayFrames,
   deleteSelectedFrame,
@@ -10,13 +13,16 @@ import {
   moveSelectedFrameByOffset,
   moveTimelineSelectionByOffset,
 } from "../helpers/frame-operations.js";
+import { computeVisibleTimelineItemCount } from "../views/timeline-panel.js";
 
 function createFrameRecord(id) {
   return {
     id,
     timelineImageSource: `${id}-timeline`,
     previewImageSource: `${id}-preview`,
+    playbackImageSource: `${id}-playback`,
     originalStorageKey: `${id}.jpg`,
+    thumbnailStorageKey: `${id}-timeline.jpg`,
     width: 640,
     height: 360,
   };
@@ -33,6 +39,8 @@ test("insertCapturedFrameAtCurrentSelection inserts at a selected gap", () => {
   });
 
   assert.deepEqual(result.frames.map((frameRecord) => frameRecord.id), ["first", "inserted", "second"]);
+  assert.equal(result.frames[1].playbackImageSource, "inserted-playback");
+  assert.equal(result.frames[1].thumbnailStorageKey, "inserted-timeline.jpg");
   assert.deepEqual(result.selectedTimelineItem, { type: "gap", index: 2 });
   assert.equal(result.replacedFrameRecord, null);
 });
@@ -85,6 +93,25 @@ test("canPlayFrames requires at least one frame", () => {
   assert.equal(canPlayFrames({ frames: [createFrameRecord("first")] }), true);
 });
 
+test("adjustPlaybackFramesPerSecond changes speed within the supported range", () => {
+  assert.equal(adjustPlaybackFramesPerSecond({ framesPerSecond: 8, adjustment: 1 }), 9);
+  assert.equal(adjustPlaybackFramesPerSecond({ framesPerSecond: 8, adjustment: -1 }), 7);
+  assert.equal(
+    adjustPlaybackFramesPerSecond({
+      framesPerSecond: MAXIMUM_PLAYBACK_FRAMES_PER_SECOND,
+      adjustment: 1,
+    }),
+    MAXIMUM_PLAYBACK_FRAMES_PER_SECOND,
+  );
+  assert.equal(
+    adjustPlaybackFramesPerSecond({
+      framesPerSecond: MINIMUM_PLAYBACK_FRAMES_PER_SECOND,
+      adjustment: -1,
+    }),
+    MINIMUM_PLAYBACK_FRAMES_PER_SECOND,
+  );
+});
+
 test("moveSelectedFrameByOffset swaps selected frames within bounds", () => {
   const result = moveSelectedFrameByOffset({
     frames: [createFrameRecord("first"), createFrameRecord("second")],
@@ -117,4 +144,25 @@ test("ensureTimelineSelectionIsVisible clamps to the available timeline", () => 
   });
 
   assert.equal(scrollOffset, 15);
+});
+
+test("computeVisibleTimelineItemCount scales with the rendered timeline width", () => {
+  assert.equal(
+    Math.round(computeVisibleTimelineItemCount({ timelinePanelWidth: 1025 })),
+    15,
+  );
+});
+
+test("ensureTimelineSelectionIsVisible keeps the timeline end at the right edge on wide layouts", () => {
+  const visibleTimelineItemCount = computeVisibleTimelineItemCount({
+    timelinePanelWidth: 1025,
+  });
+  const scrollOffset = ensureTimelineSelectionIsVisible({
+    selectedTimelineItem: { type: "gap", index: 20 },
+    currentTimelineScrollOffsetInItemUnits: 0,
+    visibleTimelineItemCount,
+    frameCount: 20,
+  });
+
+  assert.equal(Math.round(scrollOffset), 26);
 });

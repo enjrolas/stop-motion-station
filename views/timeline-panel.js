@@ -1,3 +1,20 @@
+const interItemSpacingInPixels = 8;
+const gapSlotWidthInPixels = 18;
+const frameSlotWidthInPixels = 100;
+const timelinePanelHorizontalPaddingInPixels = 20;
+const gapStrideInPixels = gapSlotWidthInPixels + interItemSpacingInPixels;
+const frameStrideInPixels = frameSlotWidthInPixels + interItemSpacingInPixels;
+const fullPairStrideInPixels = gapStrideInPixels + frameStrideInPixels;
+
+export function computeVisibleTimelineItemCount({ timelinePanelWidth }) {
+  const visibleStripWidth = Math.max(
+    1,
+    timelinePanelWidth - timelinePanelHorizontalPaddingInPixels,
+  );
+
+  return Math.max(1, (visibleStripWidth / fullPairStrideInPixels) * 2);
+}
+
 function renderGapButton(state, emit, gapIndex) {
   const gapIsSelected = state.selectedTimelineItem.type === "gap"
     && state.selectedTimelineItem.index === gapIndex;
@@ -47,16 +64,10 @@ function renderFrameButton(state, emit, frame, frameIndex) {
 
 export default function timelinePanel(state, emit) {
   const { width, timelineHeight } = state.appSurfaceLayout;
-  const interItemSpacingInPixels = 8;
-  const gapSlotWidthInPixels = 18;
-  const frameSlotWidthInPixels = 100;
-  const gapStrideInPixels = gapSlotWidthInPixels + interItemSpacingInPixels;
-  const frameStrideInPixels = frameSlotWidthInPixels + interItemSpacingInPixels;
 
   function calculateOffsetFromTimelineUnits(timelineUnits) {
     const fullPairCount = Math.floor(timelineUnits / 2);
     const remainderUnitCount = timelineUnits - (fullPairCount * 2);
-    const fullPairStrideInPixels = gapStrideInPixels + frameStrideInPixels;
 
     let offsetInPixels = fullPairCount * fullPairStrideInPixels;
 

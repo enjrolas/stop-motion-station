@@ -324,6 +324,10 @@ function serializeFrameRecordForStorage(frameRecord) {
     delete serializedFrameRecord.previewImageSource;
   }
 
+  if (isTransientImageSource(serializedFrameRecord.playbackImageSource)) {
+    delete serializedFrameRecord.playbackImageSource;
+  }
+
   return serializedFrameRecord;
 }
 

@@ -1,4 +1,5 @@
 import { createProjectBrowserTileList } from "../helpers/project-browser-operations.js";
+import { PROJECT_TITLE_KEYBOARD_KEYS } from "../helpers/project-title-keyboard.js";
 
 const PROJECT_TILE_MINIMUM_WIDTH_PIXELS = 200;
 
@@ -24,6 +25,21 @@ export default function projectBrowserView(state, emit) {
       onActivate: () => emit("project-browser:play-modal-project"),
     },
     {
+      label: "Edit Title",
+      styleClassName: "edit-title-button",
+      onActivate: () => emit("project-browser:edit-modal-project-title"),
+    },
+    {
+      label: "Record Sound",
+      styleClassName: "record-sound-button",
+      onActivate: () => emit("project-browser:record-modal-project-sound"),
+    },
+    {
+      label: "Export Video",
+      styleClassName: "export-video-button",
+      onActivate: () => emit("project-browser:export-modal-project-video"),
+    },
+    {
       label: "Delete",
       styleClassName: "delete-button",
       onActivate: () => emit("project-browser:delete-modal-project"),
@@ -37,6 +53,11 @@ export default function projectBrowserView(state, emit) {
   const selectedModalButtonIndex = Math.min(
     Math.max(0, state.projectBrowserModalSelectedActionIndex ?? 0),
     modalButtonViewModels.length - 1,
+  );
+  const titleEditorIsActive = Boolean(state.projectBrowserTitleEditor?.isActive);
+  const selectedTitleKeyboardKeyIndex = Math.min(
+    Math.max(0, state.projectBrowserTitleEditor?.selectedKeyIndex ?? 0),
+    PROJECT_TITLE_KEYBOARD_KEYS.length - 1,
   );
 
   return html`
@@ -107,30 +128,62 @@ export default function projectBrowserView(state, emit) {
             }}
           >
             <section class="project-browser-modal-dialog">
-              <h2 class="project-browser-modal-title">${modalProjectMetadata.title}</h2>
-              ${modalProjectMetadata.thumbnailImageSource
+              <h2 class="project-browser-modal-title">
+                ${titleEditorIsActive ? "Edit Title" : modalProjectMetadata.title}
+              </h2>
+
+              ${titleEditorIsActive
                 ? html`
-                  <img
-                    class="project-browser-modal-thumbnail-image"
-                    src=${modalProjectMetadata.thumbnailImageSource}
-                    alt=${`Thumbnail for ${modalProjectMetadata.title}`}
-                  />
+                  <div class="project-browser-title-editor">
+                    <div class="project-browser-title-editor-draft">
+                      ${state.projectBrowserTitleEditor.draftTitle || "Untitled"}
+                    </div>
+                    <div class="project-browser-title-keyboard">
+                      ${PROJECT_TITLE_KEYBOARD_KEYS.map((keyboardKey, keyboardKeyIndex) => html`
+                        <button
+                          type="button"
+                          class=${`project-browser-title-key ${keyboardKeyIndex === selectedTitleKeyboardKeyIndex ? "is-selected" : ""}`}
+                          onclick=${() => emit("project-browser:activate-title-key", keyboardKeyIndex)}
+                        >
+                          ${keyboardKey.label}
+                        </button>
+                      `)}
+                    </div>
+                  </div>
                 `
                 : html`
-                  <div class="project-browser-modal-thumbnail-placeholder">No frames yet</div>
+                  ${modalProjectMetadata.thumbnailImageSource
+                    ? html`
+                      <img
+                        class="project-browser-modal-thumbnail-image"
+                        src=${modalProjectMetadata.thumbnailImageSource}
+                        alt=${`Thumbnail for ${modalProjectMetadata.title}`}
+                      />
+                    `
+                    : html`
+                      <div class="project-browser-modal-thumbnail-placeholder">No frames yet</div>
+                    `}
+
+                  <div class="project-browser-modal-button-row">
+                    ${modalButtonViewModels.map((modalButtonViewModel, modalButtonIndex) => html`
+                      <button
+                        type="button"
+                        class=${`project-browser-modal-button ${modalButtonViewModel.styleClassName} ${modalButtonIndex === selectedModalButtonIndex ? "is-selected" : ""}`}
+                        onclick=${modalButtonViewModel.onActivate}
+                      >
+                        ${modalButtonViewModel.label}
+                      </button>
+                    `)}
+                  </div>
                 `}
 
-              <div class="project-browser-modal-button-row">
-                ${modalButtonViewModels.map((modalButtonViewModel, modalButtonIndex) => html`
-                  <button
-                    type="button"
-                    class=${`project-browser-modal-button ${modalButtonViewModel.styleClassName} ${modalButtonIndex === selectedModalButtonIndex ? "is-selected" : ""}`}
-                    onclick=${modalButtonViewModel.onActivate}
-                  >
-                    ${modalButtonViewModel.label}
-                  </button>
-                `)}
-              </div>
+              ${state.projectBrowserModalStatusMessage
+                ? html`
+                  <div class="project-browser-modal-status-message">
+                    ${state.projectBrowserModalStatusMessage}
+                  </div>
+                `
+                : null}
             </section>
           </div>
         `

@@ -4,7 +4,7 @@ class PlaybackController {
     this.isPlaying = false;
   }
 
-  playFrames({ frames, framesPerSecond, onFrameChange, onComplete }) {
+  playFrames({ frames, framesPerSecond, getFramesPerSecond, onFrameChange, onComplete }) {
     this.stop();
 
     if (!frames.length) {
@@ -13,8 +13,15 @@ class PlaybackController {
 
     this.isPlaying = true;
 
-    const frameDurationInMilliseconds = 1000 / framesPerSecond;
     let currentFrameIndex = 0;
+
+    const getFrameDurationInMilliseconds = () => {
+      const resolvedFramesPerSecond = getFramesPerSecond
+        ? getFramesPerSecond()
+        : framesPerSecond;
+
+      return 1000 / Math.max(1, resolvedFramesPerSecond);
+    };
 
     const continuePlayback = () => {
       if (!this.isPlaying) {
@@ -33,7 +40,7 @@ class PlaybackController {
 
       this.timeoutIdentifier = window.setTimeout(
         continuePlayback,
-        frameDurationInMilliseconds,
+        getFrameDurationInMilliseconds(),
       );
     };
 

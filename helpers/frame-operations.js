@@ -1,3 +1,7 @@
+export const DEFAULT_PLAYBACK_FRAMES_PER_SECOND = 8;
+export const MINIMUM_PLAYBACK_FRAMES_PER_SECOND = 1;
+export const MAXIMUM_PLAYBACK_FRAMES_PER_SECOND = 24;
+
 export function createInitialApplicationState() {
   return {
     appMode: "project-browser",
@@ -9,6 +13,12 @@ export function createInitialApplicationState() {
     selectedProjectBrowserIndex: 0,
     projectBrowserModalProjectId: null,
     projectBrowserModalSelectedActionIndex: 0,
+    projectBrowserModalStatusMessage: null,
+    projectBrowserTitleEditor: {
+      isActive: false,
+      draftTitle: "",
+      selectedKeyIndex: 0,
+    },
     projectBrowserColumnCount: 1,
     currentProjectId: null,
     currentProjectTitle: null,
@@ -21,6 +31,7 @@ export function createInitialApplicationState() {
     visibleTimelineItemCount: 9,
     isPlaying: false,
     playbackFrameIndex: null,
+    playbackFramesPerSecond: DEFAULT_PLAYBACK_FRAMES_PER_SECOND,
     isTimelapseCapturing: false,
     timelapseIntervalMilliseconds: 3000,
     timelapseTimerIdentifier: null,
@@ -36,6 +47,16 @@ export function createInitialApplicationState() {
       timelineHeight: 0,
     },
   };
+}
+
+export function adjustPlaybackFramesPerSecond({
+  framesPerSecond,
+  adjustment,
+}) {
+  return Math.min(
+    MAXIMUM_PLAYBACK_FRAMES_PER_SECOND,
+    Math.max(MINIMUM_PLAYBACK_FRAMES_PER_SECOND, framesPerSecond + adjustment),
+  );
 }
 
 function getSelectionPositionOnTimeline(selectedTimelineItem) {
@@ -75,7 +96,9 @@ function createFrameRecord({
   id,
   timelineImageSource,
   previewImageSource,
+  playbackImageSource,
   originalStorageKey,
+  thumbnailStorageKey,
   width,
   height,
 }) {
@@ -83,7 +106,9 @@ function createFrameRecord({
     id,
     timelineImageSource,
     previewImageSource,
+    playbackImageSource,
     originalStorageKey,
+    thumbnailStorageKey,
     width,
     height,
   };

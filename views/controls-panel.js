@@ -29,6 +29,10 @@ export default function controlsPanel(state) {
           ${captureReadinessStatusMessage}
         </div>
       </section>
+      <section class="playback-speed-panel">
+        <div class="playback-speed-title">Playback speed</div>
+        <div class="playback-speed-value">${state.playbackFramesPerSecond} fps</div>
+      </section>
       <section class="keyboard-controls-panel">
         <div class="keyboard-controls-title">Controls</div>
         <ul class="keyboard-controls-list">

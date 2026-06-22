@@ -14,6 +14,7 @@ import {
   deleteSelectedFrame,
   canDeleteSelectedFrame,
   canPlayFrames,
+  adjustPlaybackFramesPerSecond,
   moveSelectedFrameByOffset,
   moveTimelineSelectionByOffset,
   ensureTimelineSelectionIsVisible,
@@ -26,12 +27,21 @@ import {
   clampSelectionIndex,
 } from "./helpers/project-browser-operations.js";
 import {
+  PROJECT_TITLE_KEYBOARD_KEYS,
+  PROJECT_TITLE_MAXIMUM_LENGTH,
+  applyProjectTitleKeyboardKey,
+  createInactiveProjectTitleEditorState,
+  createProjectTitleEditorState,
+  moveProjectTitleKeyboardSelection,
+} from "./helpers/project-title-keyboard.js";
+import {
   GAMEPAD_ACTIONS,
   getGamepadActionForButton,
   isGamepadButtonPressed,
   isMappedGamepadButton,
 } from "./helpers/gamepad-controls.js";
 import { computeProjectBrowserColumnCount } from "./views/project-browser.js";
+import { computeVisibleTimelineItemCount } from "./views/timeline-panel.js";
 
 const ENABLE_KEYBOARD_DEBUG_LOGGING = false;
 const ENABLE_GAMEPAD_DEBUG_LOGGING = false;
@@ -43,6 +53,9 @@ const automaticCaptureMetronomeSound = new Audio(new URL("./assets/sound/metrono
 const pictureShutterClickSound = new Audio(new URL("./assets/sound/shutter-click.wav", import.meta.url).href);
 const projectBrowserModalActionList = [
   "play-project",
+  "edit-title",
+  "record-sound",
+  "export-video",
   "delete-project",
   "back-to-browser",
 ];
@@ -243,11 +256,20 @@ function scheduleAutomaticCameraStartup({ state, emitter }) {
 function createShortcutControllerState() {
   return {
     automaticCaptureShortcutWasPressed: false,
+    playShortcutWasPressed: false,
+    playbackSpeedShortcutWasUsed: false,
     currentlyPressedKeys: new Set(),
   };
 }
 
-function normalizeShortcutInput({ key, code = "", shiftKey = false }) {
+function normalizeShortcutInput({
+  key,
+  code = "",
+  shiftKey = false,
+  ctrlKey = false,
+  altKey = false,
+  metaKey = false,
+}) {
   const isSpace =
     code === "Space"
     || key === " "
@@ -258,12 +280,26 @@ function normalizeShortcutInput({ key, code = "", shiftKey = false }) {
     key,
     code,
     shiftKey,
+    ctrlKey,
+    altKey,
+    metaKey,
     pressedKey: isSpace ? "Space" : key,
     isSpace,
     isArrowUp: key === "ArrowUp",
+    isEnter: key === "Enter",
     isBackOrEscape: key === "Escape" || key === "w" || key === "W",
     isDelete: key === "ArrowDown" || key === "Backspace" || key === "Delete",
   };
+}
+
+function isPrintableProjectTitleShortcut(shortcut) {
+  return (
+    typeof shortcut.key === "string"
+    && shortcut.key.length === 1
+    && !shortcut.ctrlKey
+    && !shortcut.altKey
+    && !shortcut.metaKey
+  );
 }
 
 function updateAutomaticCaptureShortcutState({ state, controllerState }) {
@@ -277,6 +313,17 @@ function updateAutomaticCaptureShortcutState({ state, controllerState }) {
   if (isHoldingPlayAndRecordShortcut) {
     controllerState.automaticCaptureShortcutWasPressed = true;
   }
+}
+
+function adjustPlaybackSpeedFromShortcut({ state, emitter, controllerState, adjustment, log }) {
+  if (state.appMode !== "project-editor") {
+    return false;
+  }
+
+  controllerState.playbackSpeedShortcutWasUsed = true;
+  log("ACTION: adjust playback speed", { adjustment });
+  emitter.emit("playback:adjust-speed", adjustment);
+  return true;
 }
 
 function handleShortcutPress({ state, emitter, controllerState, shortcut, log }) {
@@ -302,6 +349,50 @@ function handleShortcutPress({ state, emitter, controllerState, shortcut, log })
   }
 
   if (state.appMode === "project-browser") {
+    if (state.projectBrowserModalProjectId && state.projectBrowserTitleEditor.isActive) {
+      if (shortcut.key === "Escape") {
+        emitter.emit("project-browser:cancel-title-edit");
+        return true;
+      }
+
+      if (shortcut.key === "ArrowLeft") {
+        emitter.emit("project-browser:move-title-keyboard-selection-previous");
+        return true;
+      }
+
+      if (shortcut.key === "ArrowRight") {
+        emitter.emit("project-browser:move-title-keyboard-selection-next");
+        return true;
+      }
+
+      if (shortcut.isSpace) {
+        if (shortcut.code === "Space") {
+          emitter.emit("project-browser:type-title-character", " ");
+        } else {
+          emitter.emit("project-browser:activate-selected-title-key");
+        }
+        return true;
+      }
+
+      if (shortcut.key === "Backspace" || shortcut.key === "Delete") {
+        emitter.emit("project-browser:delete-title-character");
+        return true;
+      }
+
+      if (shortcut.isEnter) {
+        emitter.emit("project-browser:save-title-edit");
+        return true;
+      }
+
+      if (isPrintableProjectTitleShortcut(shortcut)) {
+        emitter.emit("project-browser:type-title-character", shortcut.key);
+        return true;
+      }
+
+      log("UNHANDLED PROJECT TITLE EDITOR SHORTCUT", shortcut.key);
+      return false;
+    }
+
     if (shortcut.isBackOrEscape && state.projectBrowserModalProjectId) {
       emitter.emit("project-browser:close-project-modal");
       return true;
@@ -368,6 +459,16 @@ function handleShortcutPress({ state, emitter, controllerState, shortcut, log })
   }
 
   if (shortcut.key === "ArrowLeft") {
+    if (controllerState.currentlyPressedKeys.has("ArrowUp")) {
+      return adjustPlaybackSpeedFromShortcut({
+        state,
+        emitter,
+        controllerState,
+        adjustment: -1,
+        log,
+      });
+    }
+
     if (shortcut.shiftKey) {
       log("ACTION: move selected frame left");
       emitter.emit("timeline:move-selected-frame-left");
@@ -380,6 +481,16 @@ function handleShortcutPress({ state, emitter, controllerState, shortcut, log })
   }
 
   if (shortcut.key === "ArrowRight") {
+    if (controllerState.currentlyPressedKeys.has("ArrowUp")) {
+      return adjustPlaybackSpeedFromShortcut({
+        state,
+        emitter,
+        controllerState,
+        adjustment: 1,
+        log,
+      });
+    }
+
     if (shortcut.shiftKey) {
       log("ACTION: move selected frame right");
       emitter.emit("timeline:move-selected-frame-right");
@@ -392,8 +503,29 @@ function handleShortcutPress({ state, emitter, controllerState, shortcut, log })
   }
 
   if (shortcut.isArrowUp) {
-    log("ACTION: play");
-    emitter.emit("playback:start");
+    controllerState.playShortcutWasPressed = true;
+
+    if (controllerState.currentlyPressedKeys.has("ArrowLeft")) {
+      return adjustPlaybackSpeedFromShortcut({
+        state,
+        emitter,
+        controllerState,
+        adjustment: -1,
+        log,
+      });
+    }
+
+    if (controllerState.currentlyPressedKeys.has("ArrowRight")) {
+      return adjustPlaybackSpeedFromShortcut({
+        state,
+        emitter,
+        controllerState,
+        adjustment: 1,
+        log,
+      });
+    }
+
+    log("ACTION: arm play on release");
     return true;
   }
 
@@ -421,6 +553,8 @@ function handleShortcutRelease({ state, emitter, controllerState, shortcut, log 
   const automaticCaptureShortcutIsFullyReleased = !controllerState.currentlyPressedKeys.has("ArrowUp")
     && !controllerState.currentlyPressedKeys.has("Space");
 
+  const automaticCaptureShortcutWasPressed = controllerState.automaticCaptureShortcutWasPressed;
+
   if (
     controllerState.automaticCaptureShortcutWasPressed
     && automaticCaptureShortcutIsFullyReleased
@@ -428,12 +562,30 @@ function handleShortcutRelease({ state, emitter, controllerState, shortcut, log 
   ) {
     log("ACTION: toggle auto-capture on after shortcut press-and-release");
     controllerState.automaticCaptureShortcutWasPressed = false;
+    controllerState.playShortcutWasPressed = false;
+    controllerState.playbackSpeedShortcutWasUsed = false;
     emitter.emit("timelapse:start");
     return true;
   }
 
   if (automaticCaptureShortcutIsFullyReleased) {
     controllerState.automaticCaptureShortcutWasPressed = false;
+  }
+
+  if (shortcut.isArrowUp) {
+    const shouldStartPlayback =
+      controllerState.playShortcutWasPressed
+      && !controllerState.playbackSpeedShortcutWasUsed
+      && !automaticCaptureShortcutWasPressed;
+
+    controllerState.playShortcutWasPressed = false;
+    controllerState.playbackSpeedShortcutWasUsed = false;
+
+    if (shouldStartPlayback) {
+      log("ACTION: play on release");
+      emitter.emit("playback:start");
+      return true;
+    }
   }
 
   return false;
@@ -458,6 +610,9 @@ function attachGlobalKeyboardListener(state, emitter) {
       key: event.key,
       code: event.code,
       shiftKey: event.shiftKey,
+      ctrlKey: event.ctrlKey,
+      altKey: event.altKey,
+      metaKey: event.metaKey,
     });
 
     const handled = handleShortcutPress({
@@ -478,6 +633,9 @@ function attachGlobalKeyboardListener(state, emitter) {
       key: event.key,
       code: event.code,
       shiftKey: event.shiftKey,
+      ctrlKey: event.ctrlKey,
+      altKey: event.altKey,
+      metaKey: event.metaKey,
     });
 
     handleShortcutRelease({
@@ -570,7 +728,11 @@ function attachGamepadListener(state, emitter) {
       return;
     }
 
-    if (state.appMode === "project-browser" && state.projectBrowserModalProjectId) {
+    if (
+      state.appMode === "project-browser"
+      && state.projectBrowserModalProjectId
+      && !state.projectBrowserTitleEditor.isActive
+    ) {
       if (gamepadAction === GAMEPAD_ACTIONS.play) {
         emitter.emit("project-browser:play-modal-project");
         return;
@@ -691,6 +853,7 @@ export default function applicationStore(state, emitter) {
   let automaticCaptureSessionIdentifier = 0;
   let pendingLayoutRefreshAnimationFrameIdentifier = null;
   const thumbnailImageSourceCacheByStorageKey = new Map();
+  const playbackImageSourceCacheByStorageKey = new Map();
 
   function resolveViewportDimensionsForLayout() {
     const fullscreenElement = document.fullscreenElement;
@@ -721,6 +884,9 @@ export default function applicationStore(state, emitter) {
     state.projectBrowserColumnCount = computeProjectBrowserColumnCount({
       availableWidth: viewportWidth,
     });
+    state.visibleTimelineItemCount = computeVisibleTimelineItemCount({
+      timelinePanelWidth: state.appSurfaceLayout.width,
+    });
   }
 
   async function getThumbnailImageSourceForStorageKey(storageKey) {
@@ -738,6 +904,23 @@ export default function applicationStore(state, emitter) {
     const thumbnailImageSource = URL.createObjectURL(thumbnailFile);
     thumbnailImageSourceCacheByStorageKey.set(storageKey, thumbnailImageSource);
     return thumbnailImageSource;
+  }
+
+  async function getPlaybackImageSourceForStorageKey(storageKey) {
+    if (!storageKey) {
+      return null;
+    }
+
+    if (playbackImageSourceCacheByStorageKey.has(storageKey)) {
+      return playbackImageSourceCacheByStorageKey.get(storageKey);
+    }
+
+    const originalFrameFile = await frameStorageService.readOriginalFrameFile({
+      storageKey,
+    });
+    const playbackImageSource = URL.createObjectURL(originalFrameFile);
+    playbackImageSourceCacheByStorageKey.set(storageKey, playbackImageSource);
+    return playbackImageSource;
   }
 
   async function hydrateFrameImageSourcesFromStorage(frames) {
@@ -788,6 +971,28 @@ export default function applicationStore(state, emitter) {
     }));
   }
 
+  async function hydrateFramePlaybackImageSourcesFromStorage(frames) {
+    return Promise.all(frames.map(async (frameRecord) => {
+      if (!frameRecord?.originalStorageKey || frameRecord.playbackImageSource) {
+        return frameRecord;
+      }
+
+      try {
+        const playbackImageSource = await getPlaybackImageSourceForStorageKey(
+          frameRecord.originalStorageKey,
+        );
+
+        return {
+          ...frameRecord,
+          playbackImageSource,
+        };
+      } catch (playbackHydrationError) {
+        console.warn("Could not load full-resolution frame for playback:", playbackHydrationError);
+        return frameRecord;
+      }
+    }));
+  }
+
   function revokeCachedThumbnailImageSource(storageKey) {
     if (!storageKey || !thumbnailImageSourceCacheByStorageKey.has(storageKey)) {
       return;
@@ -795,6 +1000,20 @@ export default function applicationStore(state, emitter) {
 
     URL.revokeObjectURL(thumbnailImageSourceCacheByStorageKey.get(storageKey));
     thumbnailImageSourceCacheByStorageKey.delete(storageKey);
+  }
+
+  function revokeCachedPlaybackImageSource(storageKey) {
+    if (!storageKey || !playbackImageSourceCacheByStorageKey.has(storageKey)) {
+      return;
+    }
+
+    URL.revokeObjectURL(playbackImageSourceCacheByStorageKey.get(storageKey));
+    playbackImageSourceCacheByStorageKey.delete(storageKey);
+  }
+
+  async function prepareFullResolutionPlaybackFrames() {
+    await capturePersistenceService.waitForPendingProjectPersistence();
+    state.frames = await hydrateFramePlaybackImageSourcesFromStorage(state.frames);
   }
 
   async function reloadProjectsFromStorage() {
@@ -874,6 +1093,10 @@ export default function applicationStore(state, emitter) {
     state.timelineScrollTargetOffsetInItemUnits = 0;
     updateTimelineScrollTargetAndClampCurrentOffset();
     state.appMode = "project-editor";
+    state.projectBrowserModalProjectId = null;
+    state.projectBrowserModalSelectedActionIndex = 0;
+    state.projectBrowserModalStatusMessage = null;
+    clearProjectBrowserTitleEditor();
 
     if (state.cameraStatus === "idle") {
       scheduleAutomaticCameraStartup({ state, emitter });
@@ -915,6 +1138,8 @@ export default function applicationStore(state, emitter) {
 
     state.projectBrowserModalProjectId = null;
     state.projectBrowserModalSelectedActionIndex = 0;
+    state.projectBrowserModalStatusMessage = null;
+    clearProjectBrowserTitleEditor();
   }
 
   function moveProjectBrowserModalSelectionByOffset(actionOffset) {
@@ -930,6 +1155,7 @@ export default function applicationStore(state, emitter) {
       + modalActionCount) % modalActionCount;
 
     state.projectBrowserModalSelectedActionIndex = normalizedSelectedActionIndex;
+    state.projectBrowserModalStatusMessage = null;
   }
 
   async function activateSelectedProjectBrowserTile() {
@@ -949,6 +1175,8 @@ export default function applicationStore(state, emitter) {
 
     state.projectBrowserModalProjectId = selectedTile.projectId;
     state.projectBrowserModalSelectedActionIndex = 0;
+    state.projectBrowserModalStatusMessage = null;
+    clearProjectBrowserTitleEditor();
   }
 
   function getProjectMetadataForProjectBrowserModal() {
@@ -961,12 +1189,18 @@ export default function applicationStore(state, emitter) {
     ) ?? null;
   }
 
+  function clearProjectBrowserTitleEditor() {
+    state.projectBrowserTitleEditor = createInactiveProjectTitleEditorState();
+  }
+
   async function openProjectBrowserModalProjectInEditor() {
     const selectedProjectMetadata = getProjectMetadataForProjectBrowserModal();
 
     if (!selectedProjectMetadata) {
       state.projectBrowserModalProjectId = null;
       state.projectBrowserModalSelectedActionIndex = 0;
+      state.projectBrowserModalStatusMessage = null;
+      clearProjectBrowserTitleEditor();
       return;
     }
 
@@ -976,10 +1210,151 @@ export default function applicationStore(state, emitter) {
     });
     state.projectBrowserModalProjectId = null;
     state.projectBrowserModalSelectedActionIndex = 0;
+    state.projectBrowserModalStatusMessage = null;
+    clearProjectBrowserTitleEditor();
 
     await openProjectInEditorById({
       projectId: selectedProjectMetadata.id,
     });
+  }
+
+  async function editProjectBrowserModalProjectTitle() {
+    const selectedProjectMetadata = getProjectMetadataForProjectBrowserModal();
+
+    if (!selectedProjectMetadata) {
+      state.projectBrowserModalProjectId = null;
+      state.projectBrowserModalSelectedActionIndex = 0;
+      state.projectBrowserModalStatusMessage = null;
+      clearProjectBrowserTitleEditor();
+      return;
+    }
+
+    state.projectBrowserModalStatusMessage = null;
+    state.projectBrowserTitleEditor = createProjectTitleEditorState({
+      title: selectedProjectMetadata.title,
+    });
+  }
+
+  async function saveProjectBrowserModalProjectTitle(nextProjectTitle) {
+    const selectedProjectMetadata = getProjectMetadataForProjectBrowserModal();
+
+    if (!selectedProjectMetadata) {
+      state.projectBrowserModalProjectId = null;
+      state.projectBrowserModalSelectedActionIndex = 0;
+      state.projectBrowserModalStatusMessage = null;
+      clearProjectBrowserTitleEditor();
+      return;
+    }
+
+    const projectToRename = await projectStorageService.loadProject({
+      projectId: selectedProjectMetadata.id,
+    });
+
+    await projectStorageService.saveProject({
+      projectId: selectedProjectMetadata.id,
+      frames: projectToRename.frames,
+      title: nextProjectTitle,
+    });
+    await reloadProjectsFromStorage();
+
+    state.selectedProjectBrowserIndex = findBrowserSelectionIndexForProjectId({
+      projects: state.projects,
+      projectId: selectedProjectMetadata.id,
+    });
+    state.projectBrowserModalStatusMessage = "Project title updated.";
+    clearProjectBrowserTitleEditor();
+  }
+
+  function moveProjectBrowserTitleKeyboardSelectionByOffset(offset) {
+    state.projectBrowserTitleEditor = {
+      ...state.projectBrowserTitleEditor,
+      selectedKeyIndex: moveProjectTitleKeyboardSelection({
+        selectedKeyIndex: state.projectBrowserTitleEditor.selectedKeyIndex,
+        offset,
+      }),
+    };
+  }
+
+  function selectProjectBrowserTitleKeyboardKey(keyIndex) {
+    state.projectBrowserTitleEditor = {
+      ...state.projectBrowserTitleEditor,
+      selectedKeyIndex: Math.min(
+        Math.max(0, keyIndex),
+        PROJECT_TITLE_KEYBOARD_KEYS.length - 1,
+      ),
+    };
+  }
+
+  function typeProjectBrowserTitleCharacter(character) {
+    if (typeof character !== "string" || character.length < 1) {
+      return;
+    }
+
+    state.projectBrowserTitleEditor = {
+      ...state.projectBrowserTitleEditor,
+      draftTitle: `${state.projectBrowserTitleEditor.draftTitle}${character}`.slice(
+        0,
+        PROJECT_TITLE_MAXIMUM_LENGTH,
+      ),
+    };
+    state.projectBrowserModalStatusMessage = null;
+  }
+
+  function deleteProjectBrowserTitleCharacter() {
+    state.projectBrowserTitleEditor = {
+      ...state.projectBrowserTitleEditor,
+      draftTitle: state.projectBrowserTitleEditor.draftTitle.slice(0, -1),
+    };
+    state.projectBrowserModalStatusMessage = null;
+  }
+
+  async function saveProjectBrowserTitleEditorDraft() {
+    const nextProjectTitle = state.projectBrowserTitleEditor.draftTitle.trim();
+
+    if (!nextProjectTitle) {
+      state.projectBrowserModalStatusMessage = "Title cannot be empty.";
+      return;
+    }
+
+    await saveProjectBrowserModalProjectTitle(nextProjectTitle);
+  }
+
+  async function activateSelectedProjectBrowserTitleKey() {
+    const selectedKey = PROJECT_TITLE_KEYBOARD_KEYS[
+      state.projectBrowserTitleEditor.selectedKeyIndex
+    ];
+    const keyApplicationResult = applyProjectTitleKeyboardKey({
+      draftTitle: state.projectBrowserTitleEditor.draftTitle,
+      key: selectedKey,
+    });
+
+    if (keyApplicationResult.action === "edit") {
+      state.projectBrowserTitleEditor = {
+        ...state.projectBrowserTitleEditor,
+        draftTitle: keyApplicationResult.draftTitle,
+      };
+      state.projectBrowserModalStatusMessage = null;
+      return;
+    }
+
+    if (keyApplicationResult.action === "save") {
+      await saveProjectBrowserModalProjectTitle(keyApplicationResult.titleToSave);
+      return;
+    }
+
+    if (keyApplicationResult.action === "cancel") {
+      state.projectBrowserModalStatusMessage = null;
+      clearProjectBrowserTitleEditor();
+      return;
+    }
+
+    if (selectedKey?.type === "save") {
+      state.projectBrowserModalStatusMessage = "Title cannot be empty.";
+    }
+  }
+
+  function markProjectBrowserModalActionUnavailable(actionLabel) {
+    state.projectBrowserModalStatusMessage = `${actionLabel} is not available yet.`;
   }
 
   async function deleteProjectInProjectBrowserModal() {
@@ -988,6 +1363,8 @@ export default function applicationStore(state, emitter) {
     if (!selectedProjectMetadata) {
       state.projectBrowserModalProjectId = null;
       state.projectBrowserModalSelectedActionIndex = 0;
+      state.projectBrowserModalStatusMessage = null;
+      clearProjectBrowserTitleEditor();
       return;
     }
 
@@ -1003,6 +1380,7 @@ export default function applicationStore(state, emitter) {
           await frameStorageService.deleteOriginalFrame({
             storageKey: frameRecord.originalStorageKey,
           });
+          revokeCachedPlaybackImageSource(frameRecord.originalStorageKey);
         } catch (originalFrameDeleteError) {
           console.warn("Could not delete a project frame original asset:", originalFrameDeleteError);
         }
@@ -1026,6 +1404,8 @@ export default function applicationStore(state, emitter) {
     await reloadProjectsFromStorage();
     state.projectBrowserModalProjectId = null;
     state.projectBrowserModalSelectedActionIndex = 0;
+    state.projectBrowserModalStatusMessage = null;
+    clearProjectBrowserTitleEditor();
     state.selectedProjectBrowserIndex = clampSelectionIndex({
       selectedIndex: state.selectedProjectBrowserIndex,
       tileCount: createProjectBrowserTileList({ projects: state.projects }).length,
@@ -1251,6 +1631,8 @@ export default function applicationStore(state, emitter) {
       thumbnailStorageKey: deletedFrameRecord.thumbnailStorageKey,
     });
 
+    revokeCachedPlaybackImageSource(deletedFrameRecord.originalStorageKey);
+
     if (deletedFrameRecord.thumbnailStorageKey) {
       revokeCachedThumbnailImageSource(deletedFrameRecord.thumbnailStorageKey);
     }
@@ -1430,6 +1812,8 @@ export default function applicationStore(state, emitter) {
     state.selectedProjectBrowserIndex = 0;
     state.projectBrowserModalProjectId = null;
     state.projectBrowserModalSelectedActionIndex = 0;
+    state.projectBrowserModalStatusMessage = null;
+    clearProjectBrowserTitleEditor();
     state.appMode = "project-browser";
     emitter.emit("render");
   });
@@ -1453,6 +1837,8 @@ export default function applicationStore(state, emitter) {
 
   emitter.on("application:resize", () => {
     updateApplicationLayoutFromViewport();
+    updateTimelineScrollTargetAndClampCurrentOffset();
+    animateTimelineScrollOffsetTowardsTargetIfNeeded();
     emitter.emit("render");
   });
 
@@ -1524,6 +1910,8 @@ export default function applicationStore(state, emitter) {
 
     state.projectBrowserModalProjectId = null;
     state.projectBrowserModalSelectedActionIndex = 0;
+    state.projectBrowserModalStatusMessage = null;
+    clearProjectBrowserTitleEditor();
     emitter.emit("render");
   });
 
@@ -1545,6 +1933,112 @@ export default function applicationStore(state, emitter) {
     emitter.emit("render");
   });
 
+  emitter.on("project-browser:move-title-keyboard-selection-previous", () => {
+    if (
+      state.appMode !== "project-browser"
+      || !state.projectBrowserModalProjectId
+      || !state.projectBrowserTitleEditor.isActive
+    ) {
+      return;
+    }
+
+    moveProjectBrowserTitleKeyboardSelectionByOffset(-1);
+    emitter.emit("render");
+  });
+
+  emitter.on("project-browser:move-title-keyboard-selection-next", () => {
+    if (
+      state.appMode !== "project-browser"
+      || !state.projectBrowserModalProjectId
+      || !state.projectBrowserTitleEditor.isActive
+    ) {
+      return;
+    }
+
+    moveProjectBrowserTitleKeyboardSelectionByOffset(1);
+    emitter.emit("render");
+  });
+
+  emitter.on("project-browser:activate-selected-title-key", async () => {
+    if (
+      state.appMode !== "project-browser"
+      || !state.projectBrowserModalProjectId
+      || !state.projectBrowserTitleEditor.isActive
+    ) {
+      return;
+    }
+
+    await activateSelectedProjectBrowserTitleKey();
+    emitter.emit("render");
+  });
+
+  emitter.on("project-browser:activate-title-key", async (keyIndex) => {
+    if (
+      state.appMode !== "project-browser"
+      || !state.projectBrowserModalProjectId
+      || !state.projectBrowserTitleEditor.isActive
+    ) {
+      return;
+    }
+
+    selectProjectBrowserTitleKeyboardKey(keyIndex);
+    await activateSelectedProjectBrowserTitleKey();
+    emitter.emit("render");
+  });
+
+  emitter.on("project-browser:type-title-character", (character) => {
+    if (
+      state.appMode !== "project-browser"
+      || !state.projectBrowserModalProjectId
+      || !state.projectBrowserTitleEditor.isActive
+    ) {
+      return;
+    }
+
+    typeProjectBrowserTitleCharacter(character);
+    emitter.emit("render");
+  });
+
+  emitter.on("project-browser:delete-title-character", () => {
+    if (
+      state.appMode !== "project-browser"
+      || !state.projectBrowserModalProjectId
+      || !state.projectBrowserTitleEditor.isActive
+    ) {
+      return;
+    }
+
+    deleteProjectBrowserTitleCharacter();
+    emitter.emit("render");
+  });
+
+  emitter.on("project-browser:save-title-edit", async () => {
+    if (
+      state.appMode !== "project-browser"
+      || !state.projectBrowserModalProjectId
+      || !state.projectBrowserTitleEditor.isActive
+    ) {
+      return;
+    }
+
+    await saveProjectBrowserTitleEditorDraft();
+    emitter.emit("render");
+  });
+
+  emitter.on("project-browser:cancel-title-edit", () => {
+    if (
+      state.appMode !== "project-browser"
+      || !state.projectBrowserModalProjectId
+      || !state.projectBrowserTitleEditor.isActive
+    ) {
+      return;
+    }
+
+    state.projectBrowserModalStatusMessage = null;
+    clearProjectBrowserTitleEditor();
+    emitter.emit("render");
+  });
+
   emitter.on("project-browser:activate-selected-modal-action", async () => {
     if (state.appMode !== "project-browser" || !state.projectBrowserModalProjectId) {
       return;
@@ -1558,6 +2052,24 @@ export default function applicationStore(state, emitter) {
       return;
     }
 
+    if (selectedModalActionKey === "edit-title") {
+      await editProjectBrowserModalProjectTitle();
+      emitter.emit("render");
+      return;
+    }
+
+    if (selectedModalActionKey === "record-sound") {
+      markProjectBrowserModalActionUnavailable("Record sound");
+      emitter.emit("render");
+      return;
+    }
+
+    if (selectedModalActionKey === "export-video") {
+      markProjectBrowserModalActionUnavailable("Export video");
+      emitter.emit("render");
+      return;
+    }
+
     if (selectedModalActionKey === "delete-project") {
       await deleteProjectInProjectBrowserModal();
       emitter.emit("render");
@@ -1566,6 +2078,8 @@ export default function applicationStore(state, emitter) {
 
     state.projectBrowserModalProjectId = null;
     state.projectBrowserModalSelectedActionIndex = 0;
+    state.projectBrowserModalStatusMessage = null;
+    clearProjectBrowserTitleEditor();
     emitter.emit("render");
   });
 
@@ -1575,6 +2089,33 @@ export default function applicationStore(state, emitter) {
     }
 
     await openProjectBrowserModalProjectInEditor();
+    emitter.emit("render");
+  });
+
+  emitter.on("project-browser:edit-modal-project-title", async () => {
+    if (state.appMode !== "project-browser" || !state.projectBrowserModalProjectId) {
+      return;
+    }
+
+    await editProjectBrowserModalProjectTitle();
+    emitter.emit("render");
+  });
+
+  emitter.on("project-browser:record-modal-project-sound", () => {
+    if (state.appMode !== "project-browser" || !state.projectBrowserModalProjectId) {
+      return;
+    }
+
+    markProjectBrowserModalActionUnavailable("Record sound");
+    emitter.emit("render");
+  });
+
+  emitter.on("project-browser:export-modal-project-video", () => {
+    if (state.appMode !== "project-browser" || !state.projectBrowserModalProjectId) {
+      return;
+    }
+
+    markProjectBrowserModalActionUnavailable("Export video");
     emitter.emit("render");
   });
 
@@ -1600,6 +2141,8 @@ export default function applicationStore(state, emitter) {
     });
     state.projectBrowserModalProjectId = null;
     state.projectBrowserModalSelectedActionIndex = 0;
+    state.projectBrowserModalStatusMessage = null;
+    clearProjectBrowserTitleEditor();
     state.appMode = "project-browser";
     emitter.emit("render");
   });
@@ -1789,7 +2332,13 @@ export default function applicationStore(state, emitter) {
     emitter.emit("render");
   });
 
-  emitter.on("playback:start", () => {
+  emitter.on("playback:start", async () => {
+    if (state.appMode !== "project-editor" || state.isPlaying || state.isTimelapseCapturing || !canPlayFrames(state)) {
+      return;
+    }
+
+    await prepareFullResolutionPlaybackFrames();
+
     if (state.appMode !== "project-editor" || state.isPlaying || state.isTimelapseCapturing || !canPlayFrames(state)) {
       return;
     }
@@ -1802,7 +2351,10 @@ export default function applicationStore(state, emitter) {
 
     playbackController.playFrames({
       frames: state.frames,
-      framesPerSecond: 8,
+      framesPerSecond: state.playbackFramesPerSecond,
+      getFramesPerSecond() {
+        return state.playbackFramesPerSecond;
+      },
       onFrameChange(frameIndex) {
         state.playbackFrameIndex = frameIndex;
         updateTimelineScrollTargetAndClampCurrentOffset();
@@ -1817,6 +2369,18 @@ export default function applicationStore(state, emitter) {
         emitter.emit("render");
       },
     });
+  });
+
+  emitter.on("playback:adjust-speed", (adjustment) => {
+    if (state.appMode !== "project-editor") {
+      return;
+    }
+
+    state.playbackFramesPerSecond = adjustPlaybackFramesPerSecond({
+      framesPerSecond: state.playbackFramesPerSecond,
+      adjustment,
+    });
+    emitter.emit("render");
   });
 
   emitter.on("playback:stop", () => {

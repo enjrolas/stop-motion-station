@@ -152,6 +152,8 @@ export default function previewPanel(state, emit) {
 
   if (state.isPlaying && state.playbackFrameIndex !== null) {
     const playbackFrameRecord = state.frames[state.playbackFrameIndex];
+    const playbackImageSource = playbackFrameRecord.playbackImageSource
+      ?? playbackFrameRecord.previewImageSource;
 
     return html`
       <section
@@ -160,7 +162,7 @@ export default function previewPanel(state, emit) {
       >
         <img
           class="playback-preview-image"
-          src=${playbackFrameRecord.previewImageSource}
+          src=${playbackImageSource}
           draggable="false"
           alt=${`Playback frame ${state.playbackFrameIndex + 1}`}
         />
