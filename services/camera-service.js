@@ -78,6 +78,67 @@ class CameraService {
     }
   }
 
+  supportsFastCapturePipeline() {
+    return typeof createImageBitmap === "function" && typeof URL.createObjectURL === "function";
+  }
+
+  async captureFramePreviewDataForBackgroundPersistence() {
+    const captureStartedAtMilliseconds = performance.now();
+    const frameWidth = this.videoElement.videoWidth;
+    const frameHeight = this.videoElement.videoHeight;
+
+    if (!frameWidth || !frameHeight) {
+      throw new Error("Camera preview is not ready to capture a frame yet.");
+    }
+
+    if (!this.supportsFastCapturePipeline()) {
+      throw new Error("Fast capture pipeline is unavailable in this browser.");
+    }
+
+    const sourceImageBitmap = await createImageBitmap(this.videoElement);
+    const timelineSize = createTimelineFrameSize({
+      frameWidth,
+      frameHeight,
+    });
+
+    if (this.thumbnailCanvasElement.width !== timelineSize.width) {
+      this.thumbnailCanvasElement.width = timelineSize.width;
+    }
+
+    if (this.thumbnailCanvasElement.height !== timelineSize.height) {
+      this.thumbnailCanvasElement.height = timelineSize.height;
+    }
+
+    drawImageWithBothAxesFlipped({
+      renderingContext: this.thumbnailRenderingContext,
+      sourceImage: sourceImageBitmap,
+      sourceWidth: frameWidth,
+      sourceHeight: frameHeight,
+      targetWidth: timelineSize.width,
+      targetHeight: timelineSize.height,
+    });
+
+    const timelineBlob = await canvasToBlob(
+      this.thumbnailCanvasElement,
+      "image/jpeg",
+      0.8,
+    );
+
+    const timelineImageSource = URL.createObjectURL(timelineBlob);
+    const captureDurationMilliseconds = performance.now() - captureStartedAtMilliseconds;
+
+    return {
+      sourceImageBitmap,
+      timelineBlob,
+      timelineImageSource,
+      previewImageSource: timelineImageSource,
+      timelineBlobSizeInBytes: timelineBlob.size,
+      captureDurationMilliseconds,
+      width: frameWidth,
+      height: frameHeight,
+    };
+  }
+
   async captureFrameRecordData() {
     const captureStartedAtMilliseconds = performance.now();
     const frameWidth = this.videoElement.videoWidth;
@@ -95,9 +156,11 @@ class CameraService {
       this.captureCanvasElement.height = frameHeight;
     }
 
-    drawVideoFrameWithBothAxesFlipped({
+    drawImageWithBothAxesFlipped({
       renderingContext: this.captureRenderingContext,
-      sourceVideoElement: this.videoElement,
+      sourceImage: this.videoElement,
+      sourceWidth: frameWidth,
+      sourceHeight: frameHeight,
       targetWidth: frameWidth,
       targetHeight: frameHeight,
     });
@@ -108,14 +171,9 @@ class CameraService {
       0.9,
     );
 
-    const timelineMaximumWidth = 320;
-    const timelineMaximumHeight = 180;
-
-    const timelineSize = fitWithinBounds({
-      sourceWidth: frameWidth,
-      sourceHeight: frameHeight,
-      maximumWidth: timelineMaximumWidth,
-      maximumHeight: timelineMaximumHeight,
+    const timelineSize = createTimelineFrameSize({
+      frameWidth,
+      frameHeight,
     });
 
     if (this.thumbnailCanvasElement.width !== timelineSize.width) {
@@ -160,9 +218,11 @@ class CameraService {
   }
 }
 
-function drawVideoFrameWithBothAxesFlipped({
+function drawImageWithBothAxesFlipped({
   renderingContext,
-  sourceVideoElement,
+  sourceImage,
+  sourceWidth,
+  sourceHeight,
   targetWidth,
   targetHeight,
 }) {
@@ -170,13 +230,29 @@ function drawVideoFrameWithBothAxesFlipped({
   renderingContext.translate(targetWidth, targetHeight);
   renderingContext.scale(-1, -1);
   renderingContext.drawImage(
-    sourceVideoElement,
+    sourceImage,
+    0,
+    0,
+    sourceWidth,
+    sourceHeight,
     0,
     0,
     targetWidth,
     targetHeight,
   );
   renderingContext.restore();
+}
+
+function createTimelineFrameSize({ frameWidth, frameHeight }) {
+  const timelineMaximumWidth = 320;
+  const timelineMaximumHeight = 180;
+
+  return fitWithinBounds({
+    sourceWidth: frameWidth,
+    sourceHeight: frameHeight,
+    maximumWidth: timelineMaximumWidth,
+    maximumHeight: timelineMaximumHeight,
+  });
 }
 
 function canvasToBlob(canvasElement, type, quality) {

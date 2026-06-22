@@ -7,7 +7,7 @@ export default function controlsPanel(state) {
   const captureIsReady = state.captureReadinessStatus === "capture-ready";
   const captureReadinessStatusMessage = captureIsReady
     ? "Capture ready. Press Space or B3 to take a picture."
-    : "Busy saving the most recent frame. New captures are temporarily blocked.";
+    : "Busy preparing the most recent frame. New captures are temporarily blocked.";
 
   return html`
     <aside class="controls-panel" style=${`width: ${controlsWidth}px; height: ${previewHeight}px;`}>

@@ -34,9 +34,25 @@ class FrameStorageService {
     return this.framesDirectoryHandle;
   }
 
-  async saveOriginalFrameBlob({ frameId, blob }) {
+  async saveOriginalFrameBlob({ frameId, storageKey = createOriginalFrameStorageKey(frameId), blob }) {
     const framesDirectoryHandle = await this.getFramesDirectoryHandle();
-    const storageKey = `${frameId}.jpg`;
+    const frameFileHandle = await framesDirectoryHandle.getFileHandle(storageKey, {
+      create: true,
+    });
+
+    const fileWritableStream = await frameFileHandle.createWritable();
+
+    try {
+      await fileWritableStream.write(blob);
+    } finally {
+      await fileWritableStream.close();
+    }
+
+    return storageKey;
+  }
+
+  async saveThumbnailFrameBlob({ frameId, storageKey = createThumbnailFrameStorageKey(frameId), blob }) {
+    const framesDirectoryHandle = await this.getFramesDirectoryHandle();
     const frameFileHandle = await framesDirectoryHandle.getFileHandle(storageKey, {
       create: true,
     });
@@ -53,6 +69,14 @@ class FrameStorageService {
   }
 
   async deleteOriginalFrame({ storageKey }) {
+    await this.deleteFrameStorageEntry({ storageKey });
+  }
+
+  async deleteThumbnailFrame({ storageKey }) {
+    await this.deleteFrameStorageEntry({ storageKey });
+  }
+
+  async deleteFrameStorageEntry({ storageKey }) {
     if (!storageKey) {
       return;
     }
@@ -73,6 +97,20 @@ class FrameStorageService {
     const frameFileHandle = await framesDirectoryHandle.getFileHandle(storageKey);
     return frameFileHandle.getFile();
   }
+
+  async readThumbnailFrameFile({ storageKey }) {
+    const framesDirectoryHandle = await this.getFramesDirectoryHandle();
+    const frameFileHandle = await framesDirectoryHandle.getFileHandle(storageKey);
+    return frameFileHandle.getFile();
+  }
+}
+
+export function createOriginalFrameStorageKey(frameId) {
+  return `${frameId}.jpg`;
+}
+
+export function createThumbnailFrameStorageKey(frameId) {
+  return `${frameId}-timeline.jpg`;
 }
 
 const frameStorageService = new FrameStorageService();

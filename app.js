@@ -1,5 +1,9 @@
 import cameraService from "./services/camera-service.js";
-import frameStorageService from "./services/frame-storage-service.js";
+import capturePersistenceService from "./services/capture-persistence-service.js";
+import frameStorageService, {
+  createOriginalFrameStorageKey,
+  createThumbnailFrameStorageKey,
+} from "./services/frame-storage-service.js";
 import playbackController from "./services/playback-controller.js";
 import projectStorageService from "./services/project-storage-service.js";
 import computeLayout from "./helpers/compute-layout.js";
@@ -686,6 +690,7 @@ export default function applicationStore(state, emitter) {
   let automaticCaptureTimeoutIdentifier = null;
   let automaticCaptureSessionIdentifier = 0;
   let pendingLayoutRefreshAnimationFrameIdentifier = null;
+  const thumbnailImageSourceCacheByStorageKey = new Map();
 
   function resolveViewportDimensionsForLayout() {
     const fullscreenElement = document.fullscreenElement;
@@ -718,8 +723,84 @@ export default function applicationStore(state, emitter) {
     });
   }
 
+  async function getThumbnailImageSourceForStorageKey(storageKey) {
+    if (!storageKey) {
+      return null;
+    }
+
+    if (thumbnailImageSourceCacheByStorageKey.has(storageKey)) {
+      return thumbnailImageSourceCacheByStorageKey.get(storageKey);
+    }
+
+    const thumbnailFile = await frameStorageService.readThumbnailFrameFile({
+      storageKey,
+    });
+    const thumbnailImageSource = URL.createObjectURL(thumbnailFile);
+    thumbnailImageSourceCacheByStorageKey.set(storageKey, thumbnailImageSource);
+    return thumbnailImageSource;
+  }
+
+  async function hydrateFrameImageSourcesFromStorage(frames) {
+    return Promise.all(frames.map(async (frameRecord) => {
+      if (
+        !frameRecord?.thumbnailStorageKey
+        || (frameRecord.timelineImageSource && frameRecord.previewImageSource)
+      ) {
+        return frameRecord;
+      }
+
+      try {
+        const thumbnailImageSource = await getThumbnailImageSourceForStorageKey(
+          frameRecord.thumbnailStorageKey,
+        );
+
+        return {
+          ...frameRecord,
+          timelineImageSource: frameRecord.timelineImageSource ?? thumbnailImageSource,
+          previewImageSource: frameRecord.previewImageSource ?? thumbnailImageSource,
+        };
+      } catch (thumbnailHydrationError) {
+        console.warn("Could not load frame thumbnail:", thumbnailHydrationError);
+        return frameRecord;
+      }
+    }));
+  }
+
+  async function hydrateProjectThumbnailImageSourcesFromStorage(projects) {
+    return Promise.all(projects.map(async (projectMetadata) => {
+      if (!projectMetadata?.thumbnailStorageKey || projectMetadata.thumbnailImageSource) {
+        return projectMetadata;
+      }
+
+      try {
+        const thumbnailImageSource = await getThumbnailImageSourceForStorageKey(
+          projectMetadata.thumbnailStorageKey,
+        );
+
+        return {
+          ...projectMetadata,
+          thumbnailImageSource,
+        };
+      } catch (thumbnailHydrationError) {
+        console.warn("Could not load project thumbnail:", thumbnailHydrationError);
+        return projectMetadata;
+      }
+    }));
+  }
+
+  function revokeCachedThumbnailImageSource(storageKey) {
+    if (!storageKey || !thumbnailImageSourceCacheByStorageKey.has(storageKey)) {
+      return;
+    }
+
+    URL.revokeObjectURL(thumbnailImageSourceCacheByStorageKey.get(storageKey));
+    thumbnailImageSourceCacheByStorageKey.delete(storageKey);
+  }
+
   async function reloadProjectsFromStorage() {
-    state.projects = await projectStorageService.listProjects();
+    state.projects = await hydrateProjectThumbnailImageSourcesFromStorage(
+      await projectStorageService.listProjects(),
+    );
 
     const projectBrowserTileList = createProjectBrowserTileList({
       projects: state.projects,
@@ -732,18 +813,51 @@ export default function applicationStore(state, emitter) {
   }
 
   async function persistCurrentProjectState() {
-    if (!state.currentProjectId) {
+    const projectPersistenceSnapshot = createCurrentProjectPersistenceSnapshot();
+
+    if (!projectPersistenceSnapshot) {
       return;
     }
 
-    const updatedProjectMetadata = await projectStorageService.saveProject({
-      projectId: state.currentProjectId,
-      frames: state.frames,
-      title: state.currentProjectTitle,
-    });
+    const updatedProjectMetadata = await capturePersistenceService.persistProjectState(
+      projectPersistenceSnapshot,
+    );
 
     state.currentProjectTitle = updatedProjectMetadata.title;
     await reloadProjectsFromStorage();
+  }
+
+  function createCurrentProjectPersistenceSnapshot() {
+    if (!state.currentProjectId) {
+      return null;
+    }
+
+    return {
+      projectId: state.currentProjectId,
+      frames: [...state.frames],
+      title: state.currentProjectTitle,
+    };
+  }
+
+  function scheduleCurrentProjectStatePersistenceInBackground() {
+    const projectPersistenceSnapshot = createCurrentProjectPersistenceSnapshot();
+
+    if (!projectPersistenceSnapshot) {
+      return;
+    }
+
+    capturePersistenceService.persistProjectState(projectPersistenceSnapshot)
+      .then(async (updatedProjectMetadata) => {
+        if (state.currentProjectId === updatedProjectMetadata.id) {
+          state.currentProjectTitle = updatedProjectMetadata.title;
+        }
+
+        await reloadProjectsFromStorage();
+        emitter.emit("render");
+      })
+      .catch((projectPersistenceError) => {
+        console.error("Failed to persist project state:", projectPersistenceError);
+      });
   }
 
   async function openProjectInEditorById({ projectId }) {
@@ -751,7 +865,7 @@ export default function applicationStore(state, emitter) {
 
     state.currentProjectId = loadedProject.id;
     state.currentProjectTitle = loadedProject.title;
-    state.frames = loadedProject.frames;
+    state.frames = await hydrateFrameImageSourcesFromStorage(loadedProject.frames);
     state.selectedTimelineItem = {
       type: "gap",
       index: state.frames.length,
@@ -877,6 +991,8 @@ export default function applicationStore(state, emitter) {
       return;
     }
 
+    await capturePersistenceService.waitForPendingProjectPersistence();
+
     const projectToDelete = await projectStorageService.loadProject({
       projectId: selectedProjectMetadata.id,
     });
@@ -889,6 +1005,17 @@ export default function applicationStore(state, emitter) {
           });
         } catch (originalFrameDeleteError) {
           console.warn("Could not delete a project frame original asset:", originalFrameDeleteError);
+        }
+      }
+
+      if (frameRecord?.thumbnailStorageKey) {
+        try {
+          await frameStorageService.deleteThumbnailFrame({
+            storageKey: frameRecord.thumbnailStorageKey,
+          });
+          revokeCachedThumbnailImageSource(frameRecord.thumbnailStorageKey);
+        } catch (thumbnailFrameDeleteError) {
+          console.warn("Could not delete a project frame thumbnail asset:", thumbnailFrameDeleteError);
         }
       }
     }
@@ -920,67 +1047,163 @@ export default function applicationStore(state, emitter) {
     playSoundEffect(pictureShutterClickSound);
 
     try {
-      const capturedFrameData = await measureAsyncOperationDuration({
-        operationName: "camera-frame-capture",
-        frameIdentifier,
-        operation: () => cameraService.captureFrameRecordData(),
-      });
-
-      const originalFrameSaveResult = await measureAsyncOperationDuration({
-        operationName: "original-frame-save",
-        frameIdentifier,
-        operation: () => frameStorageService.saveOriginalFrameBlob({
-          frameId: frameIdentifier,
-          blob: capturedFrameData.originalBlob,
-        }),
-      });
-
-      const totalCaptureFlowDurationMilliseconds = performance.now()
-        - captureFlowStartedAtMilliseconds;
-
-      console.info("Frame capture flow timing", {
-        frameIdentifier,
-        captureDurationMilliseconds: capturedFrameData.captureDurationMilliseconds,
-        originalFrameSaveDurationMilliseconds: originalFrameSaveResult.captureDurationMilliseconds,
-        totalCaptureFlowDurationMilliseconds,
-        originalBlobSizeInBytes: capturedFrameData.originalBlobSizeInBytes,
-        timelineBlobSizeInBytes: capturedFrameData.timelineBlobSizeInBytes,
-      });
-
-      const capturedFrameRecordData = {
-        id: frameIdentifier,
-        timelineImageSource: capturedFrameData.timelineImageSource,
-        previewImageSource: capturedFrameData.previewImageSource,
-        originalStorageKey: originalFrameSaveResult.operationResult,
-        width: capturedFrameData.width,
-        height: capturedFrameData.height,
-      };
-
-      const insertionResult = insertCapturedFrameAtCurrentSelection({
-        frames: state.frames,
-        selectedTimelineItem: state.selectedTimelineItem,
-        capturedFrameRecordData,
-      });
-
-      state.frames = insertionResult.frames;
-      state.selectedTimelineItem = insertionResult.selectedTimelineItem;
-      updateTimelineScrollTargetAndClampCurrentOffset();
-      animateTimelineScrollOffsetTowardsTargetIfNeeded();
-
-      if (insertionResult.replacedFrameRecord) {
-        try {
-          await cleanupDeletedFrameAssets(insertionResult.replacedFrameRecord);
-        } catch (replaceCleanupError) {
-          console.error("Failed to clean up replaced frame assets:", replaceCleanupError);
-        }
+      if (
+        cameraService.supportsFastCapturePipeline()
+        && capturePersistenceService.supportsBackgroundCapturePipeline()
+      ) {
+        return await captureAndInsertFrameRecordWithBackgroundPersistence({
+          frameIdentifier,
+          captureFlowStartedAtMilliseconds,
+        });
       }
 
-      await persistCurrentProjectState();
-      return true;
+      return await captureAndInsertFrameRecordWithSynchronousPersistence({
+        frameIdentifier,
+        captureFlowStartedAtMilliseconds,
+      });
     } finally {
       state.isCaptureOperationInProgress = false;
       updateCaptureReadinessFromCurrentState();
       emitter.emit("render");
+    }
+  }
+
+  async function captureAndInsertFrameRecordWithBackgroundPersistence({
+    frameIdentifier,
+    captureFlowStartedAtMilliseconds,
+  }) {
+    const originalStorageKey = createOriginalFrameStorageKey(frameIdentifier);
+    const thumbnailStorageKey = createThumbnailFrameStorageKey(frameIdentifier);
+    const capturedFrameData = await measureAsyncOperationDuration({
+      operationName: "camera-frame-thumbnail-capture",
+      frameIdentifier,
+      operation: () => cameraService.captureFramePreviewDataForBackgroundPersistence(),
+    });
+
+    try {
+      const didQueueAssetPersistence = capturePersistenceService.saveCapturedFrameAssets({
+        frameId: frameIdentifier,
+        sourceImageBitmap: capturedFrameData.sourceImageBitmap,
+        timelineBlob: capturedFrameData.timelineBlob,
+        width: capturedFrameData.width,
+        height: capturedFrameData.height,
+      });
+
+      if (!didQueueAssetPersistence) {
+        capturedFrameData.sourceImageBitmap?.close?.();
+        URL.revokeObjectURL(capturedFrameData.timelineImageSource);
+
+        return await captureAndInsertFrameRecordWithSynchronousPersistence({
+          frameIdentifier,
+          captureFlowStartedAtMilliseconds,
+        });
+      }
+    } catch (assetPersistenceQueueError) {
+      capturedFrameData.sourceImageBitmap?.close?.();
+      URL.revokeObjectURL(capturedFrameData.timelineImageSource);
+      throw assetPersistenceQueueError;
+    }
+
+    const capturedFrameRecordData = {
+      id: frameIdentifier,
+      timelineImageSource: capturedFrameData.timelineImageSource,
+      previewImageSource: capturedFrameData.previewImageSource,
+      originalStorageKey,
+      thumbnailStorageKey,
+      width: capturedFrameData.width,
+      height: capturedFrameData.height,
+    };
+
+    const insertionResult = insertCapturedFrameRecordAndUpdateTimeline({
+      capturedFrameRecordData,
+    });
+
+    await cleanupReplacedFrameAssetsIfNeeded(insertionResult);
+
+    console.info("Frame capture ready timing", {
+      frameIdentifier,
+      persistenceMode: "background-worker",
+      thumbnailCaptureDurationMilliseconds: capturedFrameData.captureDurationMilliseconds,
+      captureReadyDurationMilliseconds: performance.now() - captureFlowStartedAtMilliseconds,
+      timelineBlobSizeInBytes: capturedFrameData.timelineBlobSizeInBytes,
+    });
+
+    scheduleCurrentProjectStatePersistenceInBackground();
+    return true;
+  }
+
+  async function captureAndInsertFrameRecordWithSynchronousPersistence({
+    frameIdentifier,
+    captureFlowStartedAtMilliseconds,
+  }) {
+    const capturedFrameData = await measureAsyncOperationDuration({
+      operationName: "camera-frame-capture",
+      frameIdentifier,
+      operation: () => cameraService.captureFrameRecordData(),
+    });
+
+    const originalFrameSaveResult = await measureAsyncOperationDuration({
+      operationName: "original-frame-save",
+      frameIdentifier,
+      operation: () => frameStorageService.saveOriginalFrameBlob({
+        frameId: frameIdentifier,
+        blob: capturedFrameData.originalBlob,
+      }),
+    });
+
+    const capturedFrameRecordData = {
+      id: frameIdentifier,
+      timelineImageSource: capturedFrameData.timelineImageSource,
+      previewImageSource: capturedFrameData.previewImageSource,
+      originalStorageKey: originalFrameSaveResult.operationResult,
+      width: capturedFrameData.width,
+      height: capturedFrameData.height,
+    };
+
+    const insertionResult = insertCapturedFrameRecordAndUpdateTimeline({
+      capturedFrameRecordData,
+    });
+
+    await cleanupReplacedFrameAssetsIfNeeded(insertionResult);
+    await persistCurrentProjectState();
+
+    console.info("Frame capture ready timing", {
+      frameIdentifier,
+      persistenceMode: "synchronous-fallback",
+      captureDurationMilliseconds: capturedFrameData.captureDurationMilliseconds,
+      originalFrameSaveDurationMilliseconds: originalFrameSaveResult.captureDurationMilliseconds,
+      captureReadyDurationMilliseconds: performance.now() - captureFlowStartedAtMilliseconds,
+      originalBlobSizeInBytes: capturedFrameData.originalBlobSizeInBytes,
+      timelineBlobSizeInBytes: capturedFrameData.timelineBlobSizeInBytes,
+    });
+
+    return true;
+  }
+
+  function insertCapturedFrameRecordAndUpdateTimeline({ capturedFrameRecordData }) {
+    const insertionResult = insertCapturedFrameAtCurrentSelection({
+      frames: state.frames,
+      selectedTimelineItem: state.selectedTimelineItem,
+      capturedFrameRecordData,
+    });
+
+    state.frames = insertionResult.frames;
+    state.selectedTimelineItem = insertionResult.selectedTimelineItem;
+    updateTimelineScrollTargetAndClampCurrentOffset();
+    animateTimelineScrollOffsetTowardsTargetIfNeeded();
+
+    return insertionResult;
+  }
+
+  async function cleanupReplacedFrameAssetsIfNeeded(insertionResult) {
+    if (!insertionResult.replacedFrameRecord) {
+      return;
+    }
+
+    try {
+      await cleanupDeletedFrameAssets(insertionResult.replacedFrameRecord);
+    } catch (replaceCleanupError) {
+      console.error("Failed to clean up replaced frame assets:", replaceCleanupError);
     }
   }
 
@@ -1021,9 +1244,16 @@ export default function applicationStore(state, emitter) {
       URL.revokeObjectURL(deletedFrameRecord.previewImageSource);
     }
 
-    await frameStorageService.deleteOriginalFrame({
-      storageKey: deletedFrameRecord.originalStorageKey,
+    await capturePersistenceService.waitForPendingProjectPersistence();
+
+    await capturePersistenceService.deleteFrameAssets({
+      originalStorageKey: deletedFrameRecord.originalStorageKey,
+      thumbnailStorageKey: deletedFrameRecord.thumbnailStorageKey,
     });
+
+    if (deletedFrameRecord.thumbnailStorageKey) {
+      revokeCachedThumbnailImageSource(deletedFrameRecord.thumbnailStorageKey);
+    }
   }
 
   function stopTimelapseCaptureInterval() {

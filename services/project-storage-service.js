@@ -68,6 +68,7 @@ class ProjectStorageService {
       createdAtMilliseconds,
       updatedAtMilliseconds: createdAtMilliseconds,
       thumbnailImageSource: null,
+      thumbnailStorageKey: null,
     };
 
     const projectContentRecord = {
@@ -121,13 +122,14 @@ class ProjectStorageService {
 
     const existingProjectMetadata = projectMetadataList[projectMetadataIndex];
     const updatedAtMilliseconds = Date.now();
-    const thumbnailImageSource = extractThumbnailImageSourceFromFrames(frames);
+    const projectThumbnailRecord = extractProjectThumbnailRecordFromFrames(frames);
 
     const updatedProjectMetadata = {
       ...existingProjectMetadata,
       title,
       updatedAtMilliseconds,
-      thumbnailImageSource,
+      thumbnailImageSource: projectThumbnailRecord.thumbnailImageSource,
+      thumbnailStorageKey: projectThumbnailRecord.thumbnailStorageKey,
     };
 
     projectMetadataList[projectMetadataIndex] = updatedProjectMetadata;
@@ -138,7 +140,7 @@ class ProjectStorageService {
       projectContentRecord: {
         id: projectId,
         title,
-        frames: [...frames],
+        frames: frames.map(serializeFrameRecordForStorage),
       },
     });
 
@@ -284,13 +286,49 @@ function createProjectIdentifier() {
   return `project-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
 }
 
-function extractThumbnailImageSourceFromFrames(frames) {
+function extractProjectThumbnailRecordFromFrames(frames) {
   if (!Array.isArray(frames) || frames.length === 0) {
-    return null;
+    return {
+      thumbnailImageSource: null,
+      thumbnailStorageKey: null,
+    };
   }
 
   const lastFrameRecord = frames[frames.length - 1];
-  return lastFrameRecord?.timelineImageSource ?? null;
+
+  if (lastFrameRecord?.thumbnailStorageKey) {
+    return {
+      thumbnailImageSource: null,
+      thumbnailStorageKey: lastFrameRecord.thumbnailStorageKey,
+    };
+  }
+
+  return {
+    thumbnailImageSource: lastFrameRecord?.timelineImageSource ?? null,
+    thumbnailStorageKey: null,
+  };
+}
+
+function serializeFrameRecordForStorage(frameRecord) {
+  if (!frameRecord || typeof frameRecord !== "object") {
+    return frameRecord;
+  }
+
+  const serializedFrameRecord = { ...frameRecord };
+
+  if (isTransientImageSource(serializedFrameRecord.timelineImageSource)) {
+    delete serializedFrameRecord.timelineImageSource;
+  }
+
+  if (isTransientImageSource(serializedFrameRecord.previewImageSource)) {
+    delete serializedFrameRecord.previewImageSource;
+  }
+
+  return serializedFrameRecord;
+}
+
+function isTransientImageSource(imageSource) {
+  return typeof imageSource === "string" && imageSource.startsWith("blob:");
 }
 
 const projectStorageService = new ProjectStorageService();
