@@ -49,10 +49,12 @@ const ENABLE_CAMERA_STARTUP_DEBUG_LOGGING = false;
 let hasAttachedGlobalKeyboardListener = false;
 let hasAttachedGamepadListener = false;
 const THREE_SECOND_COUNTDOWN_SECONDS = 3;
+const BACKGROUND_PROJECT_PERSISTENCE_DELAY_MILLISECONDS = 400;
 const automaticCaptureMetronomeSound = new Audio(new URL("./assets/sound/metronome-tick.wav", import.meta.url).href);
 const pictureShutterClickSound = new Audio(new URL("./assets/sound/shutter-click.wav", import.meta.url).href);
 const projectBrowserModalActionList = [
   "play-project",
+  "edit-project",
   "edit-title",
   "record-sound",
   "export-video",
@@ -349,6 +351,14 @@ function handleShortcutPress({ state, emitter, controllerState, shortcut, log })
   }
 
   if (state.appMode === "project-browser") {
+    if (state.isPlaying) {
+      if (shortcut.isBackOrEscape || shortcut.isSpace || shortcut.isArrowUp) {
+        emitter.emit("playback:stop");
+      }
+
+      return true;
+    }
+
     if (state.projectBrowserModalProjectId && state.projectBrowserTitleEditor.isActive) {
       if (shortcut.key === "Escape") {
         emitter.emit("project-browser:cancel-title-edit");
@@ -852,6 +862,8 @@ export default function applicationStore(state, emitter) {
   let automaticCaptureTimeoutIdentifier = null;
   let automaticCaptureSessionIdentifier = 0;
   let pendingLayoutRefreshAnimationFrameIdentifier = null;
+  let scheduledProjectPersistenceTimeoutIdentifier = null;
+  let latestScheduledProjectPersistenceSnapshot = null;
   const thumbnailImageSourceCacheByStorageKey = new Map();
   const playbackImageSourceCacheByStorageKey = new Map();
 
@@ -993,6 +1005,11 @@ export default function applicationStore(state, emitter) {
     }));
   }
 
+  async function hydrateFramesForPlayback(frames) {
+    const framesWithPreviewImageSources = await hydrateFrameImageSourcesFromStorage(frames);
+    return hydrateFramePlaybackImageSourcesFromStorage(framesWithPreviewImageSources);
+  }
+
   function revokeCachedThumbnailImageSource(storageKey) {
     if (!storageKey || !thumbnailImageSourceCacheByStorageKey.has(storageKey)) {
       return;
@@ -1012,8 +1029,8 @@ export default function applicationStore(state, emitter) {
   }
 
   async function prepareFullResolutionPlaybackFrames() {
-    await capturePersistenceService.waitForPendingProjectPersistence();
-    state.frames = await hydrateFramePlaybackImageSourcesFromStorage(state.frames);
+    await capturePersistenceService.waitForPendingFrameAssetPersistence();
+    state.frames = await hydrateFramesForPlayback(state.frames);
   }
 
   async function reloadProjectsFromStorage() {
@@ -1032,6 +1049,7 @@ export default function applicationStore(state, emitter) {
   }
 
   async function persistCurrentProjectState() {
+    cancelScheduledCurrentProjectStatePersistence();
     const projectPersistenceSnapshot = createCurrentProjectPersistenceSnapshot();
 
     if (!projectPersistenceSnapshot) {
@@ -1060,6 +1078,35 @@ export default function applicationStore(state, emitter) {
 
   function scheduleCurrentProjectStatePersistenceInBackground() {
     const projectPersistenceSnapshot = createCurrentProjectPersistenceSnapshot();
+
+    if (!projectPersistenceSnapshot) {
+      return;
+    }
+
+    latestScheduledProjectPersistenceSnapshot = projectPersistenceSnapshot;
+
+    if (scheduledProjectPersistenceTimeoutIdentifier !== null) {
+      window.clearTimeout(scheduledProjectPersistenceTimeoutIdentifier);
+    }
+
+    scheduledProjectPersistenceTimeoutIdentifier = window.setTimeout(() => {
+      scheduledProjectPersistenceTimeoutIdentifier = null;
+      persistLatestScheduledProjectStateInBackground();
+    }, BACKGROUND_PROJECT_PERSISTENCE_DELAY_MILLISECONDS);
+  }
+
+  function cancelScheduledCurrentProjectStatePersistence() {
+    if (scheduledProjectPersistenceTimeoutIdentifier !== null) {
+      window.clearTimeout(scheduledProjectPersistenceTimeoutIdentifier);
+      scheduledProjectPersistenceTimeoutIdentifier = null;
+    }
+
+    latestScheduledProjectPersistenceSnapshot = null;
+  }
+
+  function persistLatestScheduledProjectStateInBackground() {
+    const projectPersistenceSnapshot = latestScheduledProjectPersistenceSnapshot;
+    latestScheduledProjectPersistenceSnapshot = null;
 
     if (!projectPersistenceSnapshot) {
       return;
@@ -1097,6 +1144,7 @@ export default function applicationStore(state, emitter) {
     state.projectBrowserModalSelectedActionIndex = 0;
     state.projectBrowserModalStatusMessage = null;
     clearProjectBrowserTitleEditor();
+    clearProjectBrowserPlaybackState();
 
     if (state.cameraStatus === "idle") {
       scheduleAutomaticCameraStartup({ state, emitter });
@@ -1193,6 +1241,12 @@ export default function applicationStore(state, emitter) {
     state.projectBrowserTitleEditor = createInactiveProjectTitleEditorState();
   }
 
+  function clearProjectBrowserPlaybackState() {
+    state.projectBrowserPlaybackProjectId = null;
+    state.projectBrowserPlaybackTitle = null;
+    state.projectBrowserPlaybackFrames = [];
+  }
+
   async function openProjectBrowserModalProjectInEditor() {
     const selectedProjectMetadata = getProjectMetadataForProjectBrowserModal();
 
@@ -1215,6 +1269,82 @@ export default function applicationStore(state, emitter) {
 
     await openProjectInEditorById({
       projectId: selectedProjectMetadata.id,
+    });
+  }
+
+  async function playProjectBrowserModalProjectFullscreen() {
+    if (state.isPlaying) {
+      return;
+    }
+
+    const selectedProjectMetadata = getProjectMetadataForProjectBrowserModal();
+
+    if (!selectedProjectMetadata) {
+      state.projectBrowserModalProjectId = null;
+      state.projectBrowserModalSelectedActionIndex = 0;
+      state.projectBrowserModalStatusMessage = null;
+      clearProjectBrowserTitleEditor();
+      clearProjectBrowserPlaybackState();
+      return;
+    }
+
+    await capturePersistenceService.waitForPendingProjectPersistence();
+
+    const projectToPlay = await projectStorageService.loadProject({
+      projectId: selectedProjectMetadata.id,
+    });
+
+    if (!projectToPlay.frames.length) {
+      state.projectBrowserModalStatusMessage = "Project has no frames.";
+      clearProjectBrowserTitleEditor();
+      clearProjectBrowserPlaybackState();
+      return;
+    }
+
+    const playbackFrames = await hydrateFramesForPlayback(projectToPlay.frames);
+
+    state.projectBrowserPlaybackProjectId = projectToPlay.id;
+    state.projectBrowserPlaybackTitle = projectToPlay.title;
+    state.projectBrowserPlaybackFrames = playbackFrames;
+    state.projectBrowserModalProjectId = null;
+    state.projectBrowserModalSelectedActionIndex = 0;
+    state.projectBrowserModalStatusMessage = null;
+    clearProjectBrowserTitleEditor();
+
+    state.isPlaying = true;
+    state.playbackFrameIndex = 0;
+    emitter.emit("render");
+
+    playbackController.playFrames({
+      frames: state.projectBrowserPlaybackFrames,
+      framesPerSecond: state.playbackFramesPerSecond,
+      getFramesPerSecond() {
+        return state.playbackFramesPerSecond;
+      },
+      onFrameChange(frameIndex) {
+        if (
+          state.appMode !== "project-browser"
+          || state.projectBrowserPlaybackProjectId !== projectToPlay.id
+        ) {
+          return;
+        }
+
+        state.playbackFrameIndex = frameIndex;
+        emitter.emit("render");
+      },
+      onComplete() {
+        if (
+          state.appMode !== "project-browser"
+          || state.projectBrowserPlaybackProjectId !== projectToPlay.id
+        ) {
+          return;
+        }
+
+        state.isPlaying = false;
+        state.playbackFrameIndex = null;
+        clearProjectBrowserPlaybackState();
+        emitter.emit("render");
+      },
     });
   }
 
@@ -1814,6 +1944,7 @@ export default function applicationStore(state, emitter) {
     state.projectBrowserModalSelectedActionIndex = 0;
     state.projectBrowserModalStatusMessage = null;
     clearProjectBrowserTitleEditor();
+    clearProjectBrowserPlaybackState();
     state.appMode = "project-browser";
     emitter.emit("render");
   });
@@ -2047,6 +2178,12 @@ export default function applicationStore(state, emitter) {
     const selectedModalActionKey = projectBrowserModalActionList[state.projectBrowserModalSelectedActionIndex];
 
     if (selectedModalActionKey === "play-project") {
+      await playProjectBrowserModalProjectFullscreen();
+      emitter.emit("render");
+      return;
+    }
+
+    if (selectedModalActionKey === "edit-project") {
       await openProjectBrowserModalProjectInEditor();
       emitter.emit("render");
       return;
@@ -2084,6 +2221,15 @@ export default function applicationStore(state, emitter) {
   });
 
   emitter.on("project-browser:play-modal-project", async () => {
+    if (state.appMode !== "project-browser" || !state.projectBrowserModalProjectId) {
+      return;
+    }
+
+    await playProjectBrowserModalProjectFullscreen();
+    emitter.emit("render");
+  });
+
+  emitter.on("project-browser:edit-modal-project", async () => {
     if (state.appMode !== "project-browser" || !state.projectBrowserModalProjectId) {
       return;
     }
@@ -2143,6 +2289,7 @@ export default function applicationStore(state, emitter) {
     state.projectBrowserModalSelectedActionIndex = 0;
     state.projectBrowserModalStatusMessage = null;
     clearProjectBrowserTitleEditor();
+    clearProjectBrowserPlaybackState();
     state.appMode = "project-browser";
     emitter.emit("render");
   });
@@ -2384,11 +2531,19 @@ export default function applicationStore(state, emitter) {
   });
 
   emitter.on("playback:stop", () => {
+    const playbackWasInProjectBrowser = state.appMode === "project-browser";
+
     playbackController.stop();
     state.isPlaying = false;
     state.playbackFrameIndex = null;
-    updateTimelineScrollTargetAndClampCurrentOffset();
-    animateTimelineScrollOffsetTowardsTargetIfNeeded();
+
+    if (playbackWasInProjectBrowser) {
+      clearProjectBrowserPlaybackState();
+    } else {
+      updateTimelineScrollTargetAndClampCurrentOffset();
+      animateTimelineScrollOffsetTowardsTargetIfNeeded();
+    }
+
     emitter.emit("render");
   });
 }

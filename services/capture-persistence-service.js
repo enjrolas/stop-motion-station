@@ -7,6 +7,7 @@ class CapturePersistenceService {
     this.workerIsUnavailable = false;
     this.nextWorkerRequestId = 1;
     this.pendingWorkerRequests = new Map();
+    this.pendingFrameAssetPersistencePromises = new Set();
     this.projectPersistenceQueuePromise = Promise.resolve();
   }
 
@@ -27,9 +28,26 @@ class CapturePersistenceService {
       return false;
     }
 
+    const requestId = this.nextWorkerRequestId;
+    this.nextWorkerRequestId += 1;
+
+    const frameAssetPersistencePromise = new Promise((resolve, reject) => {
+      this.pendingWorkerRequests.set(requestId, {
+        resolve,
+        reject,
+      });
+    });
+    const trackedFrameAssetPersistencePromise = frameAssetPersistencePromise.finally(() => {
+      this.pendingFrameAssetPersistencePromises.delete(trackedFrameAssetPersistencePromise);
+    });
+
+    trackedFrameAssetPersistencePromise.catch(() => {});
+    this.pendingFrameAssetPersistencePromises.add(trackedFrameAssetPersistencePromise);
+
     try {
       worker.postMessage({
         type: "save-captured-frame-assets",
+        requestId,
         frameId,
         sourceImageBitmap,
         timelineBlob,
@@ -55,6 +73,17 @@ class CapturePersistenceService {
 
   waitForPendingProjectPersistence() {
     return this.projectPersistenceQueuePromise.catch(() => {});
+  }
+
+  async waitForPendingFrameAssetPersistence() {
+    await Promise.allSettled([...this.pendingFrameAssetPersistencePromises]);
+  }
+
+  async waitForPendingPersistence() {
+    await Promise.allSettled([
+      this.waitForPendingProjectPersistence(),
+      this.waitForPendingFrameAssetPersistence(),
+    ]);
   }
 
   async deleteFrameAssets({ originalStorageKey, thumbnailStorageKey }) {
@@ -173,11 +202,13 @@ class CapturePersistenceService {
     }
 
     if (message?.type === "captured-frame-assets-saved") {
+      this.resolveWorkerRequest(message.requestId, message);
       console.info("Captured frame assets saved", message);
       return;
     }
 
     if (message?.type === "captured-frame-assets-save-failed") {
+      this.rejectWorkerRequest(message.requestId, createErrorFromWorkerMessage(message.error));
       console.error(
         "Failed to save captured frame assets:",
         message.frameId,

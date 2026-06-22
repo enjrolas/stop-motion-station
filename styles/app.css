@@ -361,6 +361,24 @@ body {
   text-overflow: ellipsis;
 }
 
+.project-browser-playback-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: #000000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.project-browser-playback-image {
+  width: 100vw;
+  height: 100vh;
+  object-fit: contain;
+  display: block;
+  background: #000000;
+}
+
 .project-browser-modal-backdrop {
   position: fixed;
   inset: 0;

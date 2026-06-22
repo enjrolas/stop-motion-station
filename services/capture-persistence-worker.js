@@ -5,6 +5,8 @@ import frameStorageService, {
 import projectStorageService from "./project-storage-service.js";
 
 let backgroundQueuePromise = Promise.resolve();
+let originalFrameCanvasElement = null;
+let originalFrameRenderingContext = null;
 
 self.addEventListener("message", (messageEvent) => {
   const message = messageEvent.data;
@@ -15,6 +17,7 @@ self.addEventListener("message", (messageEvent) => {
     }).catch((saveError) => {
       self.postMessage({
         type: "captured-frame-assets-save-failed",
+        requestId: message.requestId,
         frameId: message.frameId,
         error: serializeError(saveError),
       });
@@ -69,6 +72,7 @@ function enqueueBackgroundOperation(operation) {
 }
 
 async function saveCapturedFrameAssets({
+  requestId,
   frameId,
   sourceImageBitmap,
   timelineBlob,
@@ -107,6 +111,7 @@ async function saveCapturedFrameAssets({
 
   self.postMessage({
     type: "captured-frame-assets-saved",
+    requestId,
     frameId,
     originalStorageKey,
     thumbnailStorageKey,
@@ -123,13 +128,23 @@ async function encodeOriginalFrameBlob({
   width,
   height,
 }) {
-  const captureCanvasElement = new OffscreenCanvas(width, height);
-  const captureRenderingContext = captureCanvasElement.getContext("2d", {
-    alpha: false,
-  });
+  if (!originalFrameCanvasElement) {
+    originalFrameCanvasElement = new OffscreenCanvas(width, height);
+    originalFrameRenderingContext = originalFrameCanvasElement.getContext("2d", {
+      alpha: false,
+    });
+  }
+
+  if (originalFrameCanvasElement.width !== width) {
+    originalFrameCanvasElement.width = width;
+  }
+
+  if (originalFrameCanvasElement.height !== height) {
+    originalFrameCanvasElement.height = height;
+  }
 
   drawImageWithBothAxesFlipped({
-    renderingContext: captureRenderingContext,
+    renderingContext: originalFrameRenderingContext,
     sourceImage: sourceImageBitmap,
     sourceWidth: width,
     sourceHeight: height,
@@ -137,7 +152,7 @@ async function encodeOriginalFrameBlob({
     targetHeight: height,
   });
 
-  return captureCanvasElement.convertToBlob({
+  return originalFrameCanvasElement.convertToBlob({
     type: "image/jpeg",
     quality: 0.9,
   });

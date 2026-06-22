@@ -25,6 +25,11 @@ export default function projectBrowserView(state, emit) {
       onActivate: () => emit("project-browser:play-modal-project"),
     },
     {
+      label: "Edit",
+      styleClassName: "edit-button",
+      onActivate: () => emit("project-browser:edit-modal-project"),
+    },
+    {
       label: "Edit Title",
       styleClassName: "edit-title-button",
       onActivate: () => emit("project-browser:edit-modal-project-title"),
@@ -59,6 +64,14 @@ export default function projectBrowserView(state, emit) {
     Math.max(0, state.projectBrowserTitleEditor?.selectedKeyIndex ?? 0),
     PROJECT_TITLE_KEYBOARD_KEYS.length - 1,
   );
+  const projectBrowserPlaybackFrameRecord = state.isPlaying && state.playbackFrameIndex !== null
+    ? state.projectBrowserPlaybackFrames[state.playbackFrameIndex] ?? null
+    : null;
+  const projectBrowserPlaybackImageSource = projectBrowserPlaybackFrameRecord
+    ? projectBrowserPlaybackFrameRecord.playbackImageSource
+      ?? projectBrowserPlaybackFrameRecord.previewImageSource
+      ?? projectBrowserPlaybackFrameRecord.timelineImageSource
+    : null;
 
   return html`
     <div id="app" class="application-root project-browser-root">
@@ -186,6 +199,19 @@ export default function projectBrowserView(state, emit) {
                 : null}
             </section>
           </div>
+        `
+        : null}
+
+      ${projectBrowserPlaybackImageSource
+        ? html`
+          <section class="project-browser-playback-overlay">
+            <img
+              class="project-browser-playback-image"
+              src=${projectBrowserPlaybackImageSource}
+              draggable="false"
+              alt=${`Playback frame ${state.playbackFrameIndex + 1}`}
+            />
+          </section>
         `
         : null}
     </div>

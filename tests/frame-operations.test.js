@@ -13,7 +13,10 @@ import {
   moveSelectedFrameByOffset,
   moveTimelineSelectionByOffset,
 } from "../helpers/frame-operations.js";
-import { computeVisibleTimelineItemCount } from "../views/timeline-panel.js";
+import {
+  computeRenderedTimelineRange,
+  computeVisibleTimelineItemCount,
+} from "../views/timeline-panel.js";
 
 function createFrameRecord(id) {
   return {
@@ -151,6 +154,18 @@ test("computeVisibleTimelineItemCount scales with the rendered timeline width", 
     Math.round(computeVisibleTimelineItemCount({ timelinePanelWidth: 1025 })),
     15,
   );
+});
+
+test("computeRenderedTimelineRange limits timeline rendering to the visible range with overscan", () => {
+  assert.deepEqual(computeRenderedTimelineRange({
+    frameCount: 100,
+    timelineScrollOffsetInItemUnits: 40.4,
+    visibleTimelineItemCount: 12,
+    overscanItemCount: 4,
+  }), {
+    startPosition: 36,
+    endPosition: 57,
+  });
 });
 
 test("ensureTimelineSelectionIsVisible keeps the timeline end at the right edge on wide layouts", () => {

@@ -15,6 +15,24 @@ export function computeVisibleTimelineItemCount({ timelinePanelWidth }) {
   return Math.max(1, (visibleStripWidth / fullPairStrideInPixels) * 2);
 }
 
+export function computeRenderedTimelineRange({
+  frameCount,
+  timelineScrollOffsetInItemUnits,
+  visibleTimelineItemCount,
+  overscanItemCount = 6,
+}) {
+  const maximumTimelinePosition = frameCount * 2;
+  const visibleStartPosition = Math.floor(timelineScrollOffsetInItemUnits);
+  const visibleEndPosition = Math.ceil(
+    timelineScrollOffsetInItemUnits + visibleTimelineItemCount,
+  );
+
+  return {
+    startPosition: Math.max(0, visibleStartPosition - overscanItemCount),
+    endPosition: Math.min(maximumTimelinePosition, visibleEndPosition + overscanItemCount),
+  };
+}
+
 function renderGapButton(state, emit, gapIndex) {
   const gapIsSelected = state.selectedTimelineItem.type === "gap"
     && state.selectedTimelineItem.index === gapIndex;
@@ -84,29 +102,54 @@ export default function timelinePanel(state, emit) {
   const timelineOffsetInPixels = calculateOffsetFromTimelineUnits(
     state.timelineScrollOffsetInItemUnits,
   );
+  const renderedTimelineRange = computeRenderedTimelineRange({
+    frameCount: state.frames.length,
+    timelineScrollOffsetInItemUnits: state.timelineScrollOffsetInItemUnits,
+    visibleTimelineItemCount: state.visibleTimelineItemCount,
+  });
+  const firstRenderedGapIndex = Math.max(
+    0,
+    Math.floor(renderedTimelineRange.startPosition / 2),
+  );
+  const lastRenderedGapIndex = Math.min(
+    state.frames.length,
+    Math.ceil(renderedTimelineRange.endPosition / 2),
+  );
   const timelineItems = [];
 
-  for (let gapIndex = 0; gapIndex <= state.frames.length; gapIndex += 1) {
+  for (let gapIndex = firstRenderedGapIndex; gapIndex <= lastRenderedGapIndex; gapIndex += 1) {
     const gapTimelinePosition = gapIndex * 2;
-    timelineItems.push(html`
-      <div
-        class="timeline-item-slot"
-        style=${`left: ${calculateOffsetFromTimelineUnits(gapTimelinePosition) - timelineOffsetInPixels}px;`}
-      >
-        ${renderGapButton(state, emit, gapIndex)}
-      </div>
-    `);
 
-    if (gapIndex < state.frames.length) {
-      const frameTimelinePosition = (gapIndex * 2) + 1;
+    if (
+      gapTimelinePosition >= renderedTimelineRange.startPosition
+      && gapTimelinePosition <= renderedTimelineRange.endPosition
+    ) {
       timelineItems.push(html`
         <div
           class="timeline-item-slot"
-          style=${`left: ${calculateOffsetFromTimelineUnits(frameTimelinePosition) - timelineOffsetInPixels}px;`}
+          style=${`left: ${calculateOffsetFromTimelineUnits(gapTimelinePosition) - timelineOffsetInPixels}px;`}
         >
-          ${renderFrameButton(state, emit, state.frames[gapIndex], gapIndex)}
+          ${renderGapButton(state, emit, gapIndex)}
         </div>
       `);
+    }
+
+    if (gapIndex < state.frames.length) {
+      const frameTimelinePosition = (gapIndex * 2) + 1;
+
+      if (
+        frameTimelinePosition >= renderedTimelineRange.startPosition
+        && frameTimelinePosition <= renderedTimelineRange.endPosition
+      ) {
+        timelineItems.push(html`
+          <div
+            class="timeline-item-slot"
+            style=${`left: ${calculateOffsetFromTimelineUnits(frameTimelinePosition) - timelineOffsetInPixels}px;`}
+          >
+            ${renderFrameButton(state, emit, state.frames[gapIndex], gapIndex)}
+          </div>
+        `);
+      }
     }
   }
 
