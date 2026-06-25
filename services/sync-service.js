@@ -2,7 +2,10 @@ import frameStorageService from "./frame-storage-service.js";
 import projectStorageService from "./project-storage-service.js";
 
 const SYNC_STATE_FILE_NAME = "sync-state.json";
-const DEVICE_USER_ID_STORAGE_KEY = "smbs.device-user-id";
+const TABLE_UID_COOKIE_NAME = "smbs-table-uid";
+const DEFAULT_TABLE_UID = "kaleidoscope";
+const TABLE_UID_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 3650; // ~10 years
+const DEFAULT_API_BASE_URL = "https://smbs.artiswrong.com/api";
 const RETRY_DELAY_MILLISECONDS = 15000;
 const PERIODIC_SYNC_CHECK_INTERVAL_MILLISECONDS = 60000;
 
@@ -13,7 +16,9 @@ const PERIODIC_SYNC_CHECK_INTERVAL_MILLISECONDS = 60000;
 class SyncService {
   constructor() {
     this.config = null;
-    this.deviceUserId = null;
+    this.tableUid = null;
+    this.apiKey = null;
+    this.apiKeyPromise = null;
     this.syncState = { version: 1, projects: {} };
     this.hasLoadedSyncState = false;
     this.initializePromise = null;
@@ -67,17 +72,30 @@ class SyncService {
   async initializeInternal() {
     this.config = await loadSyncConfig();
 
-    if (!this.config?.apiKey) {
+    if (this.config.disabled) {
       this.updateStatus({
         enabled: false,
         state: "disabled",
-        message: "Backend sync is not configured.",
+        message: "Backend sync is disabled.",
       });
       return false;
     }
 
-    this.deviceUserId = resolveDeviceUserId();
+    // The table is identified by a UID cookie (default "kaleidoscope"). The UID
+    // is the device identity used to obtain an API key from the backend. The key
+    // itself is never stored — it is held in memory and re-fetched when missing.
+    this.tableUid = resolveTableUid();
+
     await this.loadSyncState();
+
+    // Session-init key acquisition: no in-memory key yet, so resolve the UID
+    // cookie and exchange it for a key now. Failures (e.g. offline) are
+    // non-fatal — the key is re-fetched lazily on the next request.
+    try {
+      await this.ensureApiKey();
+    } catch (apiKeyError) {
+      console.warn("Could not obtain backend API key at startup:", apiKeyError?.message ?? apiKeyError);
+    }
 
     this.updateStatus({
       enabled: true,
@@ -88,6 +106,58 @@ class SyncService {
     this.startPeriodicSyncMonitor();
 
     return true;
+  }
+
+  isEnabled() {
+    return Boolean(this.config) && !this.config.disabled;
+  }
+
+  // Returns the table's API key, fetching one from the backend's unauthenticated
+  // /register/ endpoint (keyed by the UID cookie) the first time it is needed.
+  // The key is held only in this in-memory variable — never persisted — so it is
+  // re-fetched on the next load. Registration is idempotent per UID.
+  async ensureApiKey() {
+    if (this.apiKey) {
+      return this.apiKey;
+    }
+
+    if (!this.apiKeyPromise) {
+      this.apiKeyPromise = this.acquireApiKey().finally(() => {
+        this.apiKeyPromise = null;
+      });
+    }
+
+    return this.apiKeyPromise;
+  }
+
+  async acquireApiKey() {
+    const tableUid = this.tableUid ?? resolveTableUid();
+    this.tableUid = tableUid;
+
+    let response;
+    try {
+      response = await fetch(`${this.config.apiBaseUrl}/register/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ device_id: tableUid, name: `Table ${tableUid}` }),
+      });
+    } catch (networkError) {
+      throw new SyncError(`Network error registering table: ${networkError.message}`, null);
+    }
+
+    if (!response.ok) {
+      const errorText = await safeReadResponseText(response);
+      throw new SyncError(`Backend registration failed (${response.status}): ${errorText}`, response.status);
+    }
+
+    const registration = await response.json();
+
+    if (!registration?.api_key) {
+      throw new SyncError("Backend registration returned no api_key.", null);
+    }
+
+    this.apiKey = registration.api_key;
+    return this.apiKey;
   }
 
   startPeriodicSyncMonitor() {
@@ -116,10 +186,6 @@ class SyncService {
     this.requestFullSync().catch((periodicSyncError) => {
       console.warn("Periodic backend sync check failed to start:", periodicSyncError);
     });
-  }
-
-  isEnabled() {
-    return Boolean(this.config?.apiKey);
   }
 
   requestProjectSync(projectId) {
@@ -301,7 +367,7 @@ class SyncService {
     const createdProject = await this.apiRequestJson("/projects/", {
       method: "POST",
       jsonBody: {
-        user_id: this.deviceUserId,
+        user_id: this.tableUid,
         title,
         is_public: false,
       },
@@ -467,8 +533,9 @@ class SyncService {
   }
 
   async apiRequest(path, { method = "GET", body, headers, jsonBody } = {}) {
+    const apiKey = await this.ensureApiKey();
     const requestHeaders = {
-      Authorization: `Api-Key ${this.config.apiKey}`,
+      Authorization: `Api-Key ${apiKey}`,
       ...(headers ?? {}),
     };
 
@@ -574,37 +641,67 @@ class SyncError extends Error {
 }
 
 async function loadSyncConfig() {
+  // The config file is optional — the API key is always obtained from the
+  // backend using the UID cookie and never stored. A file may still override the
+  // base URL or disable sync entirely.
+  let fileConfig = {};
+
   try {
     const configModule = await import("../sync-config.js");
-    return configModule.default ?? configModule;
-  } catch (importError) {
-    console.info(
-      "Backend sync disabled: no sync-config.js found (copy sync-config.example.js to enable).",
-    );
+    fileConfig = configModule.default ?? configModule ?? {};
+  } catch {
+    // No sync-config.js present; fall back to defaults.
+  }
+
+  return {
+    apiBaseUrl: (fileConfig.apiBaseUrl ?? DEFAULT_API_BASE_URL).replace(/\/+$/, ""),
+    disabled: Boolean(fileConfig.disabled),
+  };
+}
+
+// Reads the table UID from its cookie, creating the cookie with the default UID
+// ("kaleidoscope") if it does not exist yet. Replace the cookie value with a
+// unique string to give this table its own identity.
+function resolveTableUid() {
+  const existingTableUid = readCookie(TABLE_UID_COOKIE_NAME);
+
+  if (existingTableUid) {
+    return existingTableUid;
+  }
+
+  writeCookie(TABLE_UID_COOKIE_NAME, DEFAULT_TABLE_UID, TABLE_UID_COOKIE_MAX_AGE_SECONDS);
+  return DEFAULT_TABLE_UID;
+}
+
+function readCookie(name) {
+  if (typeof document === "undefined" || !document.cookie) {
     return null;
   }
-}
 
-function resolveDeviceUserId() {
-  try {
-    const existingDeviceUserId = window.localStorage.getItem(DEVICE_USER_ID_STORAGE_KEY);
+  const encodedName = `${encodeURIComponent(name)}=`;
 
-    if (existingDeviceUserId) {
-      return existingDeviceUserId;
+  for (const cookiePart of document.cookie.split(";")) {
+    const trimmedCookie = cookiePart.trim();
+
+    if (trimmedCookie.startsWith(encodedName)) {
+      return decodeURIComponent(trimmedCookie.slice(encodedName.length));
     }
-
-    const generatedDeviceUserId = createDeviceUserId();
-    window.localStorage.setItem(DEVICE_USER_ID_STORAGE_KEY, generatedDeviceUserId);
-    return generatedDeviceUserId;
-  } catch (storageError) {
-    // localStorage unavailable; fall back to a per-session id.
-    return createDeviceUserId();
   }
+
+  return null;
 }
 
-function createDeviceUserId() {
-  const randomSuffix = Math.random().toString(16).slice(2, 10);
-  return `device-${Date.now()}-${randomSuffix}`;
+function writeCookie(name, value, maxAgeSeconds) {
+  if (typeof document === "undefined") {
+    return;
+  }
+
+  document.cookie = [
+    `${encodeURIComponent(name)}=${encodeURIComponent(value)}`,
+    "path=/",
+    `max-age=${maxAgeSeconds}`,
+    "SameSite=Lax",
+  ].join("; ");
 }
 
 async function safeReadResponseText(response) {

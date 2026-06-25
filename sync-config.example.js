@@ -1,13 +1,15 @@
-// Backend sync configuration for this kiosk/table.
+// Optional backend sync overrides.
 //
-// Copy this file to `sync-config.js` (which is gitignored) and fill in the
-// table API key issued for this device. The key is loaded by the browser, so
-// only put a per-table key here, never a shared admin credential.
+// This file is NOT required and holds NO API key. By default the app identifies
+// the table with a UID cookie (default "kaleidoscope") and automatically fetches
+// an API key from the backend's /register/ endpoint for that UID, holding it
+// only in memory. To change the table's identity, set the `smbs-table-uid`
+// cookie to a unique string instead of editing a file.
 //
-//   cp sync-config.example.js sync-config.js
-//
-// Set `apiKey` to null to disable backend sync entirely.
+// Copy to `sync-config.js` (gitignored) only if you need to override something:
+//   - apiBaseUrl: point at a different backend
+//   - disabled:   set true to turn backend sync off entirely
 export default {
-  apiKey: "your-table-api-key-here",
   apiBaseUrl: "https://smbs.artiswrong.com/api",
+  // disabled: true,
 };

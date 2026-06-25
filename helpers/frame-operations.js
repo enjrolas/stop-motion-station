@@ -50,6 +50,7 @@ export function createInitialApplicationState() {
       lastErrorMessage: null,
     },
     lastUiActivityAtMilliseconds: 0,
+    isOnline: true,
     videoExportStatus: {
       state: "idle",
       message: "Video export idle.",

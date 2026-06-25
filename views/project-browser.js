@@ -1,6 +1,6 @@
 import { createProjectBrowserTileList } from "../helpers/project-browser-operations.js";
 import { PROJECT_TITLE_KEYBOARD_KEYS } from "../helpers/project-title-keyboard.js";
-import { describeSyncStatus } from "./controls-panel.js";
+import syncIndicator from "./sync-indicator.js";
 
 const PROJECT_TILE_MINIMUM_WIDTH_PIXELS = 200;
 
@@ -76,17 +76,11 @@ export default function projectBrowserView(state, emit) {
 
   return html`
     <div id="app" class="application-root project-browser-root">
+      ${syncIndicator(state)}
       <section class="project-browser-surface">
         <header class="project-browser-header">
           <h1 class="project-browser-title">Stop Motion Station</h1>
           <p class="project-browser-subtitle">Choose a project or create a new one</p>
-          ${state.syncStatus?.enabled
-            ? html`
-              <p class=${`project-browser-sync-status ${describeSyncStatus(state.syncStatus).stateClassName}`}>
-                ${describeSyncStatus(state.syncStatus).label}
-              </p>
-            `
-            : null}
         </header>
 
         <div

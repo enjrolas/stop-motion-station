@@ -2,6 +2,7 @@ import previewPanel from "./preview-panel.js";
 import controlsPanel from "./controls-panel.js";
 import timelinePanel from "./timeline-panel.js";
 import projectBrowserView from "./project-browser.js";
+import syncIndicator from "./sync-indicator.js";
 
 export default function mainView(state, emit) {
   if (state.appMode === "project-browser") {
@@ -12,6 +13,7 @@ export default function mainView(state, emit) {
 
   return html`
     <div id="app" class="application-root">
+      ${syncIndicator(state)}
       <section
         class="application-surface"
         style=${`

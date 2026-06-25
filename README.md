@@ -101,30 +101,34 @@ truth, and local changes are mirrored up to the server.
 
 ### Setup
 
-1. Copy the config template and add the table API key issued for this device:
+No configuration is required. On first run the app:
 
-   ```sh
-   cp sync-config.example.js sync-config.js
-   ```
+1. Creates a `smbs-table-uid` **cookie** identifying this table. The default
+   value is `kaleidoscope`; replace the cookie value with a unique string to
+   give this table its own identity (its UID).
+2. At session init it requests an API key from the unauthenticated
+   `POST /register/` endpoint, sending that UID as the `device_id`, and keeps the
+   returned key in an in-memory variable only — it is never stored. The key is
+   re-fetched on the next load; registration is idempotent, so the same UID
+   always maps to the same key.
 
-   ```js
-   // sync-config.js  (gitignored — never commit the key)
-   export default {
-     apiKey: "your-table-api-key-here",
-     apiBaseUrl: "https://smbs.artiswrong.com/api",
-   };
-   ```
+The init flow is: API-key variable in memory? → if not, UID cookie? → if not,
+create the cookie with the default UID `kaleidoscope` → POST the UID to
+`/register/` → save the returned key in the variable.
 
-2. Reload the app. The project browser and editor show a "Backend sync"
-   indicator (ready / syncing / synced / retrying). Set `apiKey` to `null` to
-   disable sync; the app runs normally offline.
+The project browser and editor show a "Backend sync" indicator (ready / syncing
+/ synced / retrying).
+
+An optional `sync-config.js` (copy from `sync-config.example.js`) can override
+the backend `apiBaseUrl` or set `disabled: true` to turn sync off. It holds no
+key and is not required.
 
 ### Behavior
 
 - On startup every saved project is pushed; afterwards each capture, reorder,
   delete, and title edit triggers a debounced background sync.
-- Each project is created once on the server (a stable per-device `user_id` is
-  generated and stored in `localStorage`). Frames are uploaded by 1-based
+- Each project is created once on the server, attributed to the table UID (the
+  `smbs-table-uid` cookie value) as its `user_id`. Frames are uploaded by 1-based
   timeline position, so reorders and replacements re-upload the affected
   positions and local deletions remove the trailing remote frames.
 - Sync bookkeeping (the local→remote id map and uploaded-frame positions) is

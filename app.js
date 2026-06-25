@@ -1972,6 +1972,19 @@ export default function applicationStore(state, emitter) {
       emitter.emit("render");
     });
 
+    // Track network connectivity for the top-right status dot, and resume
+    // syncing as soon as the connection comes back.
+    state.isOnline = typeof navigator.onLine === "boolean" ? navigator.onLine : true;
+    window.addEventListener("online", () => {
+      state.isOnline = true;
+      emitter.emit("render");
+      syncService.requestFullSync().catch(() => {});
+    });
+    window.addEventListener("offline", () => {
+      state.isOnline = false;
+      emitter.emit("render");
+    });
+
     // Push every locally saved project to the backend, then keep syncing as the
     // user makes progress (wired into the persistence paths above).
     syncService.requestFullSync().catch((fullSyncError) => {
