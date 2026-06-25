@@ -5,6 +5,8 @@ export const MAXIMUM_PLAYBACK_FRAMES_PER_SECOND = 24;
 export function createInitialApplicationState() {
   return {
     appMode: "project-browser",
+    isDebugViewEnabled: false,
+    debugStorageEstimate: null,
     cameraStatus: "idle",
     cameraErrorMessage: null,
     cameraStartupWaitingForUserGesture: false,

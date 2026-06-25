@@ -27,12 +27,14 @@ self.addEventListener("message", (messageEvent) => {
 
   if (message?.type === "persist-project-state") {
     enqueueBackgroundOperation(async () => {
-      const updatedProjectMetadata = await projectStorageService.saveProject(message.snapshot);
+      // Persist only the project content file off-thread. The shared metadata
+      // list is written exclusively by the main thread (after this resolves) so
+      // its read-modify-write cannot race with creates/deletes/renames.
+      await projectStorageService.saveProjectContent(message.snapshot);
 
       self.postMessage({
         type: "project-persistence-complete",
         requestId: message.requestId,
-        updatedProjectMetadata,
       });
     }).catch((persistenceError) => {
       self.postMessage({

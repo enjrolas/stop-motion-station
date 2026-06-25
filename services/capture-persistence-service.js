@@ -151,10 +151,14 @@ class CapturePersistenceService {
       return projectStorageService.saveProject(snapshot);
     }
 
-    return this.requestWorker({
+    // The worker writes the content file off-thread; the main thread then owns
+    // the metadata-list update so it has a single serialized writer.
+    await this.requestWorker({
       type: "persist-project-state",
       snapshot,
     });
+
+    return projectStorageService.updateProjectMetadataFromFrames(snapshot);
   }
 
   requestWorker(message) {

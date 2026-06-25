@@ -3,7 +3,7 @@ import test from "node:test";
 
 import {
   clampSelectionIndex,
-  createDefaultProjectTitle,
+  createTimestampProjectTitle,
   createProjectBrowserTileList,
   findBrowserSelectionIndexForProjectId,
   moveProjectBrowserSelectionByDirection,
@@ -54,6 +54,14 @@ test("findBrowserSelectionIndexForProjectId offsets project indexes because of t
   }), 0);
 });
 
-test("createDefaultProjectTitle uses the next project count", () => {
-  assert.equal(createDefaultProjectTitle({ projects: [{ id: "first" }, { id: "second" }] }), "Project 3");
+test("createTimestampProjectTitle formats the local creation time", () => {
+  // Fixed local date/time → stable, unique, zero-padded title.
+  assert.equal(
+    createTimestampProjectTitle(new Date(2026, 5, 25, 17, 42)),
+    "2026-06-25 17:42",
+  );
+  assert.equal(
+    createTimestampProjectTitle(new Date(2026, 0, 3, 9, 5)),
+    "2026-01-03 09:05",
+  );
 });

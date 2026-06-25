@@ -65,7 +65,16 @@ export function findBrowserSelectionIndexForProjectId({ projects, projectId }) {
   return projectIndex + 1;
 }
 
-export function createDefaultProjectTitle({ projects }) {
-  const projectNumber = projects.length + 1;
-  return `Project ${projectNumber}`;
+// Default project title: the local creation timestamp, e.g. "2026-06-25 17:42".
+// Used so every project gets a unique, meaningful name without depending on a
+// running count (which broke when projects failed to persist — every new one
+// became "Project 1").
+export function createTimestampProjectTitle(creationDate = new Date()) {
+  const pad = (value) => String(value).padStart(2, "0");
+  const year = creationDate.getFullYear();
+  const month = pad(creationDate.getMonth() + 1);
+  const day = pad(creationDate.getDate());
+  const hours = pad(creationDate.getHours());
+  const minutes = pad(creationDate.getMinutes());
+  return `${year}-${month}-${day} ${hours}:${minutes}`;
 }

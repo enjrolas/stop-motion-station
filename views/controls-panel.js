@@ -5,9 +5,10 @@ export default function controlsPanel(state) {
     ? `Taking picture in ${state.autoCaptureCountdownSecondsRemaining ?? 3}...`
     : "Auto-capture is ready.";
   const captureIsReady = state.captureReadinessStatus === "capture-ready";
-  const captureReadinessStatusMessage = captureIsReady
-    ? "Capture ready. Press Space or B3 to take a picture."
-    : "Busy preparing the most recent frame. New captures are temporarily blocked.";
+  // Keep this description constant across ready/busy so the panel never changes
+  // height (and the layout never jumps) when a capture briefly goes busy. The
+  // ready/busy state is conveyed by the single-line label below.
+  const captureReadinessStatusMessage = "Press Space or B3 to take a picture.";
 
   return html`
     <aside class="controls-panel" style=${`width: ${controlsWidth}px; height: ${previewHeight}px;`}>

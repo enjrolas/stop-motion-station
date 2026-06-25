@@ -178,6 +178,47 @@ body {
   background: #3498db;
 }
 
+.debug-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 2000;
+  max-width: 420px;
+  margin: 12px;
+  padding: 14px 16px;
+  border: 1px solid #00ff9c;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.82);
+  color: #d6ffe9;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  pointer-events: none;
+}
+
+.debug-overlay-title {
+  margin-bottom: 8px;
+  color: #00ff9c;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.debug-overlay-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.debug-overlay-label {
+  color: #7fd8b0;
+}
+
+.debug-overlay-value {
+  color: #ffffff;
+  text-align: right;
+  word-break: break-all;
+}
+
 .frame-restore-indicator {
   position: fixed;
   top: 10px;
@@ -195,6 +236,7 @@ body {
 .capture-readiness-state {
   font-size: clamp(12px, 1.7vh, 17px);
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .capture-readiness-state.is-ready {

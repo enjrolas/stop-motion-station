@@ -4,6 +4,7 @@ import timelinePanel from "./timeline-panel.js";
 import projectBrowserView from "./project-browser.js";
 import syncIndicator from "./sync-indicator.js";
 import frameRestoreIndicator from "./frame-restore-indicator.js";
+import debugOverlay from "./debug-overlay.js";
 
 export default function mainView(state, emit) {
   if (state.appMode === "project-browser") {
@@ -16,6 +17,7 @@ export default function mainView(state, emit) {
     <div id="app" class="application-root">
       ${syncIndicator(state)}
       ${frameRestoreIndicator(state)}
+      ${debugOverlay(state)}
       <section
         class="application-surface"
         style=${`

@@ -6,6 +6,22 @@ class ProjectStorageService {
     this.originPrivateFileSystemRootDirectoryHandle = null;
     this.projectsDirectoryHandle = null;
     this.hasInitializedStorage = false;
+    // All read-modify-write mutations of project-metadata-list.json funnel
+    // through this single main-thread queue so concurrent creates/saves/deletes
+    // cannot clobber each other (lost-update race). The capture worker no longer
+    // writes the metadata list at all — it persists only project content — so
+    // this queue is the sole writer.
+    this.metadataMutationQueue = Promise.resolve();
+  }
+
+  // Serializes a metadata-list read-modify-write so writers never interleave.
+  enqueueMetadataListMutation(metadataMutation) {
+    const queuedMutation = this.metadataMutationQueue
+      .catch(() => {})
+      .then(metadataMutation);
+
+    this.metadataMutationQueue = queuedMutation.catch(() => {});
+    return queuedMutation;
   }
 
   async initialize() {
@@ -77,9 +93,11 @@ class ProjectStorageService {
       frames: [],
     };
 
-    const currentProjectMetadataList = await this.readProjectMetadataList();
-    currentProjectMetadataList.push(projectMetadataRecord);
-    await this.writeProjectMetadataList(currentProjectMetadataList);
+    await this.enqueueMetadataListMutation(async () => {
+      const currentProjectMetadataList = await this.readProjectMetadataList();
+      currentProjectMetadataList.push(projectMetadataRecord);
+      await this.writeProjectMetadataList(currentProjectMetadataList);
+    });
     await this.writeProjectContentRecord({
       projectId: projectIdentifier,
       projectContentRecord,
@@ -110,31 +128,20 @@ class ProjectStorageService {
     };
   }
 
+  // Persists the project content file AND updates its metadata entry. Used on
+  // the main thread (no-worker fallback and renames). The capture worker instead
+  // calls saveProjectContent + the main thread calls updateProjectMetadataFromFrames
+  // so the metadata list has a single writer.
   async saveProject({ projectId, frames, title }) {
+    await this.saveProjectContent({ projectId, frames, title });
+    return this.updateProjectMetadataFromFrames({ projectId, frames, title });
+  }
+
+  // Writes only the per-project content file (frames). Does not touch the shared
+  // metadata list, so it is safe to run off the main thread (the capture worker).
+  async saveProjectContent({ projectId, frames, title }) {
     await this.initializeIfNeeded();
 
-    const projectMetadataList = await this.readProjectMetadataList();
-    const projectMetadataIndex = projectMetadataList.findIndex((projectMetadata) => projectMetadata.id === projectId);
-
-    if (projectMetadataIndex < 0) {
-      throw new Error(`Cannot save project because it does not exist: ${projectId}`);
-    }
-
-    const existingProjectMetadata = projectMetadataList[projectMetadataIndex];
-    const updatedAtMilliseconds = Date.now();
-    const projectThumbnailRecord = extractProjectThumbnailRecordFromFrames(frames);
-
-    const updatedProjectMetadata = {
-      ...existingProjectMetadata,
-      title,
-      updatedAtMilliseconds,
-      thumbnailImageSource: projectThumbnailRecord.thumbnailImageSource,
-      thumbnailStorageKey: projectThumbnailRecord.thumbnailStorageKey,
-    };
-
-    projectMetadataList[projectMetadataIndex] = updatedProjectMetadata;
-
-    await this.writeProjectMetadataList(projectMetadataList);
     await this.writeProjectContentRecord({
       projectId,
       projectContentRecord: {
@@ -143,39 +150,75 @@ class ProjectStorageService {
         frames: frames.map(serializeFrameRecordForStorage),
       },
     });
+  }
 
-    return updatedProjectMetadata;
+  // Updates only this project's metadata-list entry (title, updatedAt,
+  // thumbnail), serialized through the single-writer queue. Returns the updated
+  // metadata, or a minimal record if the project is no longer listed (e.g. it
+  // was deleted concurrently) — in which case the list is left untouched.
+  async updateProjectMetadataFromFrames({ projectId, frames, title }) {
+    await this.initializeIfNeeded();
+
+    return this.enqueueMetadataListMutation(async () => {
+      const projectMetadataList = await this.readProjectMetadataList();
+      const projectMetadataIndex = projectMetadataList.findIndex(
+        (projectMetadata) => projectMetadata.id === projectId,
+      );
+
+      if (projectMetadataIndex < 0) {
+        return { id: projectId, title };
+      }
+
+      const projectThumbnailRecord = extractProjectThumbnailRecordFromFrames(frames);
+      const updatedProjectMetadata = {
+        ...projectMetadataList[projectMetadataIndex],
+        title,
+        updatedAtMilliseconds: Date.now(),
+        thumbnailImageSource: projectThumbnailRecord.thumbnailImageSource,
+        thumbnailStorageKey: projectThumbnailRecord.thumbnailStorageKey,
+      };
+
+      projectMetadataList[projectMetadataIndex] = updatedProjectMetadata;
+      await this.writeProjectMetadataList(projectMetadataList);
+      return updatedProjectMetadata;
+    });
   }
 
   async updateProjectMetadata({ projectId, updates }) {
     await this.initializeIfNeeded();
 
-    const projectMetadataList = await this.readProjectMetadataList();
-    const projectMetadataIndex = projectMetadataList.findIndex((projectMetadata) => projectMetadata.id === projectId);
+    return this.enqueueMetadataListMutation(async () => {
+      const projectMetadataList = await this.readProjectMetadataList();
+      const projectMetadataIndex = projectMetadataList.findIndex(
+        (projectMetadata) => projectMetadata.id === projectId,
+      );
 
-    if (projectMetadataIndex < 0) {
-      throw new Error(`Cannot update metadata because project does not exist: ${projectId}`);
-    }
+      if (projectMetadataIndex < 0) {
+        throw new Error(`Cannot update metadata because project does not exist: ${projectId}`);
+      }
 
-    projectMetadataList[projectMetadataIndex] = {
-      ...projectMetadataList[projectMetadataIndex],
-      ...updates,
-      updatedAtMilliseconds: Date.now(),
-    };
+      projectMetadataList[projectMetadataIndex] = {
+        ...projectMetadataList[projectMetadataIndex],
+        ...updates,
+        updatedAtMilliseconds: Date.now(),
+      };
 
-    await this.writeProjectMetadataList(projectMetadataList);
-    return projectMetadataList[projectMetadataIndex];
+      await this.writeProjectMetadataList(projectMetadataList);
+      return projectMetadataList[projectMetadataIndex];
+    });
   }
 
   async deleteProject({ projectId }) {
     await this.initializeIfNeeded();
 
-    const projectMetadataList = await this.readProjectMetadataList();
-    const updatedProjectMetadataList = projectMetadataList.filter(
-      (projectMetadata) => projectMetadata.id !== projectId,
-    );
+    await this.enqueueMetadataListMutation(async () => {
+      const projectMetadataList = await this.readProjectMetadataList();
+      const updatedProjectMetadataList = projectMetadataList.filter(
+        (projectMetadata) => projectMetadata.id !== projectId,
+      );
 
-    await this.writeProjectMetadataList(updatedProjectMetadataList);
+      await this.writeProjectMetadataList(updatedProjectMetadataList);
+    });
 
     const projectsDirectoryHandle = await this.getProjectsDirectoryHandle();
     const contentFileName = getProjectContentFileName(projectId);

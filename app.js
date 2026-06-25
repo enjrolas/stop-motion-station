@@ -28,7 +28,7 @@ import {
   createProjectBrowserTileList,
   moveProjectBrowserSelectionByDirection,
   findBrowserSelectionIndexForProjectId,
-  createDefaultProjectTitle,
+  createTimestampProjectTitle,
   clampSelectionIndex,
 } from "./helpers/project-browser-operations.js";
 import {
@@ -342,6 +342,14 @@ function handleShortcutPress({ state, emitter, controllerState, shortcut, log })
     code: shortcut.code,
     appMode: state.appMode,
   });
+
+  // Secret debug view: "d" toggles a diagnostics overlay from anywhere, except
+  // while typing a project title (where "d" is a literal character).
+  const isTypingProjectTitle = Boolean(state.projectBrowserTitleEditor?.isActive);
+  if (!isTypingProjectTitle && (shortcut.key === "d" || shortcut.key === "D")) {
+    emitter.emit("debug:toggle-view");
+    return true;
+  }
 
   const isHoldingPlayAndRecordShortcut = controllerState.currentlyPressedKeys.has("ArrowUp")
     && controllerState.currentlyPressedKeys.has("Space");
@@ -1228,9 +1236,7 @@ export default function applicationStore(state, emitter) {
   }
 
   async function createProjectAndOpenInEditor() {
-    const projectTitle = createDefaultProjectTitle({
-      projects: state.projects,
-    });
+    const projectTitle = createTimestampProjectTitle();
 
     const createdProjectResult = await projectStorageService.createProject({
       title: projectTitle,
@@ -1297,10 +1303,17 @@ export default function applicationStore(state, emitter) {
       return;
     }
 
-    state.projectBrowserModalProjectId = selectedTile.projectId;
+    // Selecting a project goes straight into the editor — no intermediate modal.
+    state.selectedProjectBrowserIndex = findBrowserSelectionIndexForProjectId({
+      projects: state.projects,
+      projectId: selectedTile.projectId,
+    });
+    state.projectBrowserModalProjectId = null;
     state.projectBrowserModalSelectedActionIndex = 0;
     state.projectBrowserModalStatusMessage = null;
     clearProjectBrowserTitleEditor();
+
+    await openProjectInEditorById({ projectId: selectedTile.projectId });
   }
 
   function getProjectMetadataForProjectBrowserModal() {
@@ -2094,6 +2107,17 @@ export default function applicationStore(state, emitter) {
           console.warn("Storage reclaim check failed:", reclaimError);
         });
     }, 30000);
+  });
+
+  emitter.on("debug:toggle-view", async () => {
+    state.isDebugViewEnabled = !state.isDebugViewEnabled;
+    emitter.emit("render");
+
+    if (state.isDebugViewEnabled) {
+      // Refresh the storage figures shown in the overlay each time it opens.
+      state.debugStorageEstimate = await storageMaintenanceService.getStorageEstimate();
+      emitter.emit("render");
+    }
   });
 
   emitter.on("camera:request-access", async () => {

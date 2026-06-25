@@ -1,6 +1,7 @@
 import { createProjectBrowserTileList } from "../helpers/project-browser-operations.js";
 import { PROJECT_TITLE_KEYBOARD_KEYS } from "../helpers/project-title-keyboard.js";
 import syncIndicator from "./sync-indicator.js";
+import debugOverlay from "./debug-overlay.js";
 
 const PROJECT_TILE_MINIMUM_WIDTH_PIXELS = 200;
 
@@ -77,6 +78,7 @@ export default function projectBrowserView(state, emit) {
   return html`
     <div id="app" class="application-root project-browser-root">
       ${syncIndicator(state)}
+      ${debugOverlay(state)}
       <section class="project-browser-surface">
         <header class="project-browser-header">
           <h1 class="project-browser-title">Stop Motion Station</h1>
