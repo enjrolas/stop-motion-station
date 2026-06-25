@@ -43,6 +43,7 @@ export default function debugOverlay(state) {
   const syncStatus = state.syncStatus ?? {};
   const videoExportStatus = state.videoExportStatus ?? {};
   const frameRestoreStatus = state.frameRestoreStatus;
+  const backendPullStatus = state.backendPullStatus;
 
   return html`
     <div class="debug-overlay">
@@ -55,6 +56,10 @@ export default function debugOverlay(state) {
       ${debugRow("Storage", storageValue)}
       ${debugRow("Online", state.isOnline ? "yes" : "no")}
       ${debugRow("Sync", `${syncStatus.state ?? "—"} · pending ${syncStatus.pendingProjectCount ?? 0}`)}
+      ${debugRow(
+        "Backend pull",
+        backendPullStatus?.active ? `importing ${backendPullStatus.imported ?? 0}` : "idle",
+      )}
       ${debugRow("Video export", videoExportStatus.state ?? "—")}
       ${debugRow(
         "Frame restore",

@@ -93,9 +93,23 @@ Requires the S3 bucket to allow CORS GET from the app origin.
 
 ## Backend sync (`services/sync-service.js`)
 
-Primarily push-only upload to `https://smbs.artiswrong.com/api`; OPFS stays
-canonical. The one read path is `downloadProjectOriginals`, used to repopulate a
-project whose originals were offloaded locally (see Storage maintenance above).
+Upload to `https://smbs.artiswrong.com/api`; OPFS stays canonical for local
+edits. Two read paths exist:
+
+- `downloadProjectOriginals` — repopulates a project whose originals were
+  offloaded locally (see Storage maintenance above).
+- `pullProjectsFromBackend` (run on startup) — imports this UID's server
+  projects that are **not yet present locally**, so a fresh/empty OPFS partition
+  (any browser with the same API key) converges to the server set. It downloads
+  each frame's original from S3 and regenerates a matching timeline thumbnail
+  (the backend stores originals only). It is **additive** — it never overwrites
+  or deletes local data — and tracks imported projects by remote id in
+  `sync-state.json` so they are neither re-imported nor re-uploaded.
+
+Not yet implemented: propagating per-project **updates/deletes between** tables
+(true bidirectional conflict resolution). There is also no backend project-delete
+endpoint, so local deletes do not propagate and a deleted project may be
+re-imported on a later pull.
 
 - **Identity/auth:** a `smbs-table-uid` **cookie** (default `"kaleidoscope"`) is
   the table UID. On init the service obtains an API key by POSTing the UID as

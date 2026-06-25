@@ -2076,11 +2076,37 @@ export default function applicationStore(state, emitter) {
       emitter.emit("render");
     });
 
-    // Push every locally saved project to the backend, then keep syncing as the
-    // user makes progress (wired into the persistence paths above).
-    syncService.requestFullSync().catch((fullSyncError) => {
-      console.warn("Initial backend sync could not start:", fullSyncError);
-    });
+    // Pull this table's projects down from the backend so a fresh/empty OPFS
+    // partition (any browser with the same API key) converges to the server set,
+    // then push local progress. The pull is additive — it only imports projects
+    // not already present locally.
+    state.backendPullStatus = { active: true, imported: 0 };
+    emitter.emit("render");
+    syncService.pullProjectsFromBackend({
+      onProgress: ({ imported, total }) => {
+        state.backendPullStatus = { active: true, imported, total };
+        emitter.emit("render");
+      },
+    })
+      .then(async ({ imported }) => {
+        state.backendPullStatus = null;
+        if (imported > 0) {
+          await reloadProjectsFromStorage();
+        }
+        emitter.emit("render");
+      })
+      .catch((pullError) => {
+        console.warn("Backend project pull failed:", pullError);
+        state.backendPullStatus = null;
+        emitter.emit("render");
+      })
+      .finally(() => {
+        // Push every locally saved project to the backend, then keep syncing as
+        // the user makes progress (wired into the persistence paths above).
+        syncService.requestFullSync().catch((fullSyncError) => {
+          console.warn("Initial backend sync could not start:", fullSyncError);
+        });
+      });
 
     videoExportService.setStatusListener((nextVideoExportStatus) => {
       state.videoExportStatus = nextVideoExportStatus;

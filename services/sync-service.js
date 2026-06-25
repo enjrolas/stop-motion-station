@@ -1,5 +1,9 @@
-import frameStorageService from "./frame-storage-service.js";
+import frameStorageService, {
+  createOriginalFrameStorageKey,
+  createThumbnailFrameStorageKey,
+} from "./frame-storage-service.js";
 import projectStorageService from "./project-storage-service.js";
+import createFrameId from "../helpers/create-frame-id.js";
 
 const SYNC_STATE_FILE_NAME = "sync-state.json";
 const TABLE_UID_COOKIE_NAME = "smbs-table-uid";
@@ -647,6 +651,113 @@ class SyncService {
     return { ok: failed === 0, restored, failed, total: restoreTasks.length };
   }
 
+  // Pulls this table's projects from the backend into local OPFS so a fresh /
+  // empty storage partition (any browser with the same API key) converges to the
+  // server's set. Additive only: it imports projects not already represented
+  // locally (tracked by remote id in the sync map) and never overwrites or
+  // deletes existing local data. Returns how many projects were imported.
+  async pullProjectsFromBackend({ onProgress } = {}) {
+    const isReady = await this.initialize();
+
+    if (!isReady) {
+      return { imported: 0 };
+    }
+
+    let serverProjects;
+    try {
+      serverProjects = await this.apiRequestJson("/projects/");
+    } catch (listError) {
+      console.warn("Could not list backend projects for pull:", listError);
+      return { imported: 0 };
+    }
+
+    if (!Array.isArray(serverProjects)) {
+      return { imported: 0 };
+    }
+
+    const knownRemoteIds = new Set();
+    for (const projectSyncEntry of Object.values(this.syncState.projects)) {
+      if (projectSyncEntry?.remoteId != null) {
+        knownRemoteIds.add(projectSyncEntry.remoteId);
+      }
+    }
+
+    let importedCount = 0;
+
+    for (const serverProject of serverProjects) {
+      if (!serverProject || knownRemoteIds.has(serverProject.id)) {
+        continue;
+      }
+
+      try {
+        await this.importServerProject(serverProject);
+        importedCount += 1;
+
+        if (onProgress) {
+          onProgress({ imported: importedCount, total: serverProjects.length });
+        }
+      } catch (importError) {
+        console.warn("Could not import backend project", serverProject?.id, importError);
+      }
+    }
+
+    return { imported: importedCount };
+  }
+
+  // Creates a local project mirroring a server project: downloads each frame's
+  // full-res original from S3, regenerates a matching timeline thumbnail, and
+  // records the remote↔local mapping so the project is treated as already synced.
+  async importServerProject(serverProject) {
+    const projectTitle = serverProject.title ?? "Untitled Project";
+    const serverFrames = [...(serverProject.frames ?? [])].sort(
+      (firstFrame, secondFrame) => firstFrame.number - secondFrame.number,
+    );
+
+    const createdProject = await projectStorageService.createProject({ title: projectTitle });
+    const localProjectId = createdProject.projectMetadata.id;
+
+    const localFrameRecords = [];
+    const uploadedByNumber = {};
+
+    for (const serverFrame of serverFrames) {
+      if (!serverFrame?.image) {
+        continue;
+      }
+
+      const frameImageResponse = await fetch(serverFrame.image);
+      if (!frameImageResponse.ok) {
+        throw new Error(`Frame ${serverFrame.number} download responded ${frameImageResponse.status}`);
+      }
+
+      const originalBlob = await frameImageResponse.blob();
+      const frameId = createFrameId();
+      const originalStorageKey = createOriginalFrameStorageKey(frameId);
+      const thumbnailStorageKey = createThumbnailFrameStorageKey(frameId);
+
+      await frameStorageService.saveOriginalFrameBlob({ storageKey: originalStorageKey, blob: originalBlob });
+
+      const { thumbnailBlob, width, height } = await createTimelineThumbnailFromImageBlob(originalBlob);
+      await frameStorageService.saveThumbnailFrameBlob({ storageKey: thumbnailStorageKey, blob: thumbnailBlob });
+
+      localFrameRecords.push({ id: frameId, originalStorageKey, thumbnailStorageKey, width, height });
+      uploadedByNumber[String(serverFrame.number)] = frameId;
+    }
+
+    await projectStorageService.saveProject({
+      projectId: localProjectId,
+      title: projectTitle,
+      frames: localFrameRecords,
+    });
+
+    // Mark already synced so push won't re-upload and a later pull won't re-import.
+    this.syncState.projects[localProjectId] = {
+      remoteId: serverProject.id,
+      title: projectTitle,
+      uploadedByNumber,
+    };
+    await this.saveSyncState();
+  }
+
   async apiRequest(path, { method = "GET", body, headers, jsonBody } = {}) {
     const apiKey = await this.ensureApiKey();
     const requestHeaders = {
@@ -817,6 +928,51 @@ function writeCookie(name, value, maxAgeSeconds) {
     `max-age=${maxAgeSeconds}`,
     "SameSite=Lax",
   ].join("; ");
+}
+
+// Downscales a full-res frame image into a timeline thumbnail matching the
+// capture pipeline (fit within 320x180, JPEG quality 0.8). Used when importing
+// projects from the backend, which stores only originals. Returns the thumbnail
+// blob plus the original image's pixel dimensions.
+async function createTimelineThumbnailFromImageBlob(imageBlob) {
+  const imageBitmap = await createImageBitmap(imageBlob);
+  const sourceWidth = imageBitmap.width;
+  const sourceHeight = imageBitmap.height;
+  const thumbnailSize = fitTimelineThumbnailSize(sourceWidth, sourceHeight);
+
+  let thumbnailBlob;
+  if (typeof OffscreenCanvas !== "undefined") {
+    const offscreenCanvas = new OffscreenCanvas(thumbnailSize.width, thumbnailSize.height);
+    const renderingContext = offscreenCanvas.getContext("2d", { alpha: false });
+    renderingContext.drawImage(imageBitmap, 0, 0, thumbnailSize.width, thumbnailSize.height);
+    thumbnailBlob = await offscreenCanvas.convertToBlob({ type: "image/jpeg", quality: 0.8 });
+  } else {
+    const canvasElement = document.createElement("canvas");
+    canvasElement.width = thumbnailSize.width;
+    canvasElement.height = thumbnailSize.height;
+    const renderingContext = canvasElement.getContext("2d");
+    renderingContext.drawImage(imageBitmap, 0, 0, thumbnailSize.width, thumbnailSize.height);
+    thumbnailBlob = await new Promise((resolve, reject) => {
+      canvasElement.toBlob(
+        (blob) => (blob ? resolve(blob) : reject(new Error("Failed to encode thumbnail."))),
+        "image/jpeg",
+        0.8,
+      );
+    });
+  }
+
+  imageBitmap.close?.();
+  return { thumbnailBlob, width: sourceWidth, height: sourceHeight };
+}
+
+function fitTimelineThumbnailSize(width, height) {
+  const maximumWidth = 320;
+  const maximumHeight = 180;
+  const scale = Math.min(1, maximumWidth / width, maximumHeight / height);
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
+  };
 }
 
 async function safeReadResponseText(response) {

@@ -7,6 +7,7 @@ export function createInitialApplicationState() {
     appMode: "project-browser",
     isDebugViewEnabled: false,
     debugStorageEstimate: null,
+    backendPullStatus: null,
     cameraStatus: "idle",
     cameraErrorMessage: null,
     cameraStartupWaitingForUserGesture: false,
