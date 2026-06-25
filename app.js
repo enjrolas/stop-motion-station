@@ -2037,6 +2037,17 @@ export default function applicationStore(state, emitter) {
     // evicted under disk pressure (critical on small kiosk SD cards).
     await requestPersistentStorageOnce();
 
+    // Bring back any project whose content file survived in OPFS but fell out of
+    // the metadata list (e.g. from the historical metadata-list write race).
+    try {
+      const recoveredProjectCount = await projectStorageService.recoverOrphanedProjects();
+      if (recoveredProjectCount > 0) {
+        console.info(`Recovered ${recoveredProjectCount} orphaned project(s) into the table.`);
+      }
+    } catch (recoveryError) {
+      console.warn("Could not recover orphaned projects:", recoveryError);
+    }
+
     await reloadProjectsFromStorage();
     state.selectedProjectBrowserIndex = 0;
     state.projectBrowserModalProjectId = null;

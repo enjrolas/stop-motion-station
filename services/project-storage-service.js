@@ -1,3 +1,5 @@
+import { parseProjectCreationTimestamp } from "../helpers/project-identifier.js";
+
 const PROJECTS_DIRECTORY_NAME = "projects";
 const PROJECT_METADATA_FILE_NAME = "project-metadata-list.json";
 
@@ -28,6 +30,68 @@ class ProjectStorageService {
     await this.getProjectsDirectoryHandle();
     await this.ensureProjectMetadataListFileExists();
     this.hasInitializedStorage = true;
+  }
+
+  // Re-adds any project whose content file (`<id>.json`) exists in OPFS but is
+  // missing from the metadata list — e.g. a project dropped by the historical
+  // metadata-list write race. Returns the number of projects recovered. The
+  // creation time is read back from the project id so the entry sorts sensibly.
+  async recoverOrphanedProjects() {
+    await this.initializeIfNeeded();
+
+    const projectsDirectoryHandle = await this.getProjectsDirectoryHandle();
+    const contentProjectIds = [];
+
+    for await (const entryName of projectsDirectoryHandle.keys()) {
+      if (entryName === PROJECT_METADATA_FILE_NAME || !entryName.endsWith(".json")) {
+        continue;
+      }
+
+      contentProjectIds.push(entryName.slice(0, -".json".length));
+    }
+
+    if (contentProjectIds.length === 0) {
+      return 0;
+    }
+
+    return this.enqueueMetadataListMutation(async () => {
+      const projectMetadataList = await this.readProjectMetadataList();
+      const listedProjectIds = new Set(projectMetadataList.map((projectMetadata) => projectMetadata.id));
+      let recoveredCount = 0;
+
+      for (const projectId of contentProjectIds) {
+        if (listedProjectIds.has(projectId)) {
+          continue;
+        }
+
+        let projectContentRecord;
+        try {
+          projectContentRecord = await this.readProjectContentRecord({ projectId });
+        } catch {
+          continue;
+        }
+
+        const frames = Array.isArray(projectContentRecord.frames) ? projectContentRecord.frames : [];
+        const projectThumbnailRecord = extractProjectThumbnailRecordFromFrames(frames);
+        const creationTimestamp = parseProjectCreationTimestamp(projectId, Date.now());
+
+        projectMetadataList.push({
+          id: projectId,
+          title: projectContentRecord.title ?? "Recovered Project",
+          createdAtMilliseconds: creationTimestamp,
+          updatedAtMilliseconds: creationTimestamp,
+          thumbnailImageSource: null,
+          thumbnailStorageKey: projectThumbnailRecord.thumbnailStorageKey,
+        });
+        recoveredCount += 1;
+      }
+
+      if (recoveredCount > 0) {
+        await this.writeProjectMetadataList(projectMetadataList);
+      }
+
+      return recoveredCount;
+    });
   }
 
   async getRootDirectoryHandle() {
