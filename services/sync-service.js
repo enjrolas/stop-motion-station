@@ -532,6 +532,121 @@ class SyncService {
     }
   }
 
+  // Returns the backend identity for a project plus the number→frameId map of
+  // what has been uploaded, or null if the project has no remote counterpart.
+  // Used both to decide whether a project is safely offloadable and to map
+  // restored frames back onto the correct local frame records.
+  async getProjectSyncSnapshot(projectId) {
+    await this.loadSyncState();
+    const projectSyncEntry = this.syncState.projects[projectId];
+
+    if (!projectSyncEntry?.remoteId) {
+      return null;
+    }
+
+    return {
+      remoteId: projectSyncEntry.remoteId,
+      uploadedByNumber: { ...(projectSyncEntry.uploadedByNumber ?? {}) },
+    };
+  }
+
+  // Re-downloads the full-resolution originals for a project whose images were
+  // offloaded locally to free space. Fetches the manifest (ordered frame URLs),
+  // then pulls each frame's bytes from its public S3 URL and rewrites it to OPFS
+  // under that frame's existing storage key. Frames are matched by id (via the
+  // uploaded number map) so a reorder/delete done while offloaded still restores
+  // the correct image. `onFrameRestored` is invoked per restored frame so the UI
+  // can swap the thumbnail for the full-res image as it arrives.
+  async downloadProjectOriginals({ projectId, frames, onFrameRestored, concurrency = 4 }) {
+    const isReady = await this.initialize();
+
+    if (!isReady) {
+      return { ok: false, restored: 0, failed: 0, total: 0, reason: "sync-disabled" };
+    }
+
+    const snapshot = await this.getProjectSyncSnapshot(projectId);
+
+    if (!snapshot) {
+      return { ok: false, restored: 0, failed: 0, total: 0, reason: "no-remote-project" };
+    }
+
+    let manifest;
+    try {
+      manifest = await this.apiRequestJson(`/projects/${snapshot.remoteId}/manifest/`);
+    } catch (manifestError) {
+      console.warn("Could not fetch project manifest for restore:", manifestError);
+      return { ok: false, restored: 0, failed: 0, total: 0, reason: "manifest-failed" };
+    }
+
+    const frameUrlByNumber = new Map();
+    for (const manifestFrame of manifest?.frames ?? []) {
+      frameUrlByNumber.set(String(manifestFrame.number), manifestFrame.url);
+    }
+
+    const numberByFrameId = new Map();
+    for (const [frameNumberKey, uploadedFrameId] of Object.entries(snapshot.uploadedByNumber)) {
+      numberByFrameId.set(uploadedFrameId, frameNumberKey);
+    }
+
+    const restoreTasks = [];
+    for (const frameRecord of frames ?? []) {
+      if (!frameRecord?.id || !frameRecord.originalStorageKey) {
+        continue;
+      }
+
+      const frameNumberKey = numberByFrameId.get(frameRecord.id);
+      const frameUrl = frameNumberKey ? frameUrlByNumber.get(frameNumberKey) : undefined;
+
+      if (frameUrl) {
+        restoreTasks.push({ frameRecord, frameUrl });
+      }
+    }
+
+    let restored = 0;
+    let failed = 0;
+    let nextTaskIndex = 0;
+
+    const runRestoreWorker = async () => {
+      while (nextTaskIndex < restoreTasks.length) {
+        const { frameRecord, frameUrl } = restoreTasks[nextTaskIndex];
+        nextTaskIndex += 1;
+
+        try {
+          const frameResponse = await fetch(frameUrl);
+
+          if (!frameResponse.ok) {
+            throw new Error(`Frame download responded ${frameResponse.status}`);
+          }
+
+          const frameBlob = await frameResponse.blob();
+          await frameStorageService.saveOriginalFrameBlob({
+            storageKey: frameRecord.originalStorageKey,
+            blob: frameBlob,
+          });
+
+          restored += 1;
+
+          if (onFrameRestored) {
+            onFrameRestored({
+              frameId: frameRecord.id,
+              originalStorageKey: frameRecord.originalStorageKey,
+              restored,
+              total: restoreTasks.length,
+            });
+          }
+        } catch (frameRestoreError) {
+          failed += 1;
+          console.warn("Could not restore frame original:", frameRecord.id, frameRestoreError);
+        }
+      }
+    };
+
+    const workerCount = Math.min(Math.max(1, concurrency), Math.max(1, restoreTasks.length));
+    await Promise.all(Array.from({ length: workerCount }, () => runRestoreWorker()));
+
+    return { ok: failed === 0, restored, failed, total: restoreTasks.length };
+  }
+
   async apiRequest(path, { method = "GET", body, headers, jsonBody } = {}) {
     const apiKey = await this.ensureApiKey();
     const requestHeaders = {

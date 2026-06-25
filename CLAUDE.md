@@ -63,14 +63,39 @@ for a responsive shutter while JPEG encoding + OPFS writes happen off-thread;
 there's a synchronous main-thread fallback. Project JSON is persisted on a
 ~400ms debounce.
 
-Known gaps: the app never calls `navigator.storage.persist()` (OPFS is
-evictable under disk pressure), and `project-metadata-list.json` is
-read-modify-written by both the main thread and the worker on independent
-queues (a potential lost-update race).
+On startup the app calls `navigator.storage.persist()` once
+(`services/storage-maintenance-service.js`) so OPFS is durable rather than
+best-effort, removing the whole-origin eviction risk on small kiosk disks.
+
+Known gap: `project-metadata-list.json` is read-modify-written by both the main
+thread and the worker on independent queues (a potential lost-update race).
+
+## Storage maintenance / local cache eviction (`services/storage-maintenance-service.js`)
+
+On small kiosk SD cards OPFS fills up. A periodic check (every 30s) reads
+`navigator.storage.estimate()`; once usage crosses a high-water mark it offloads
+the **full-resolution originals** of the oldest projects that are **fully backed
+up** to the gallery server, down to a low-water mark. Timeline **thumbnails are
+kept**, so offloaded projects still render. Pure logic is tested in
+`helpers/storage-eviction-policy.js` (watermark + oldest-first selection) and
+`helpers/project-backup-status.js` (the safety gate: every current frame's id
+must match its uploaded position in `sync-state.json` before its images may be
+removed). Offloaded projects are tracked in root-level `local-cache-state.json`.
+
+Reopening an offloaded project triggers a background re-download
+(`syncService.downloadProjectOriginals`): it fetches `GET /projects/<id>/manifest/`
+(ordered `{number, url}` frame list), then pulls each original from its public S3
+URL and rewrites it to OPFS under that frame's storage key (matched by frame **id**
+via the uploaded-number map, so reorders/deletes done on thumbnails restore
+correctly). Playback uses the thumbnail until each original arrives and is swapped
+in (`preview-panel.js` already falls back `playbackImageSource ?? previewImageSource`).
+Requires the S3 bucket to allow CORS GET from the app origin.
 
 ## Backend sync (`services/sync-service.js`)
 
-Push-only upload to `https://smbs.artiswrong.com/api`; OPFS stays canonical.
+Primarily push-only upload to `https://smbs.artiswrong.com/api`; OPFS stays
+canonical. The one read path is `downloadProjectOriginals`, used to repopulate a
+project whose originals were offloaded locally (see Storage maintenance above).
 
 - **Identity/auth:** a `smbs-table-uid` **cookie** (default `"kaleidoscope"`) is
   the table UID. On init the service obtains an API key by POSTing the UID as

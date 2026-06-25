@@ -8,6 +8,9 @@ import playbackController from "./services/playback-controller.js";
 import projectStorageService from "./services/project-storage-service.js";
 import syncService from "./services/sync-service.js";
 import videoExportService from "./services/video-export-service.js";
+import storageMaintenanceService, {
+  requestPersistentStorageOnce,
+} from "./services/storage-maintenance-service.js";
 import computeLayout from "./helpers/compute-layout.js";
 import createFrameId from "./helpers/create-frame-id.js";
 import {
@@ -1160,8 +1163,67 @@ export default function applicationStore(state, emitter) {
     clearProjectBrowserTitleEditor();
     clearProjectBrowserPlaybackState();
 
+    // If this project's full-res frames were offloaded to free local space,
+    // pull them back from the backend in the background. The timeline already
+    // renders from the kept thumbnails; playback uses thumbnails until each
+    // original arrives and is swapped in.
+    if (storageMaintenanceService.isProjectOffloaded(loadedProject.id)) {
+      restoreOffloadedProjectOriginalsInBackground({ projectId: loadedProject.id });
+    }
+
     if (state.cameraStatus === "idle") {
       scheduleAutomaticCameraStartup({ state, emitter });
+    }
+  }
+
+  async function restoreOffloadedProjectOriginalsInBackground({ projectId }) {
+    state.frameRestoreStatus = {
+      projectId,
+      active: true,
+      restored: 0,
+      total: state.frames.length,
+    };
+    emitter.emit("render");
+
+    const restoreResult = await syncService.downloadProjectOriginals({
+      projectId,
+      frames: state.frames,
+      onFrameRestored: async ({ frameId, originalStorageKey, restored, total }) => {
+        // The user may have navigated away before the restore finished.
+        if (state.currentProjectId !== projectId) {
+          return;
+        }
+
+        try {
+          const playbackImageSource = await getPlaybackImageSourceForStorageKey(originalStorageKey);
+          const targetFrameRecord = state.frames.find((frameRecord) => frameRecord.id === frameId);
+
+          if (targetFrameRecord) {
+            targetFrameRecord.playbackImageSource = playbackImageSource;
+          }
+        } catch (swapError) {
+          console.warn("Could not swap in restored full-res frame:", frameId, swapError);
+        }
+
+        state.frameRestoreStatus = {
+          projectId,
+          active: true,
+          restored,
+          total,
+        };
+        emitter.emit("render");
+      },
+    });
+
+    if (restoreResult.ok) {
+      await storageMaintenanceService.clearProjectOffload(projectId);
+    }
+
+    if (state.currentProjectId === projectId) {
+      state.frameRestoreStatus = restoreResult.ok
+        ? null
+        : { projectId, active: false, failed: true, restored: restoreResult.restored, total: restoreResult.total };
+      emitter.emit("render");
     }
   }
 
@@ -1957,6 +2019,11 @@ export default function applicationStore(state, emitter) {
 
     await frameStorageService.initialize();
     await projectStorageService.initialize();
+
+    // Ask the browser to make OPFS durable so the whole origin is not silently
+    // evicted under disk pressure (critical on small kiosk SD cards).
+    await requestPersistentStorageOnce();
+
     await reloadProjectsFromStorage();
     state.selectedProjectBrowserIndex = 0;
     state.projectBrowserModalProjectId = null;
@@ -2016,6 +2083,17 @@ export default function applicationStore(state, emitter) {
         console.warn("Idle video encode check failed:", idleEncodeCheckError);
       });
     }, 1000);
+
+    // Periodically reclaim local storage when it nears the browser quota by
+    // offloading the oldest fully-backed-up projects' full-res frames. Skips the
+    // open project so we never evict what the user is actively working on.
+    window.setInterval(() => {
+      storageMaintenanceService
+        .reclaimStorageIfNeeded({ excludeProjectId: state.currentProjectId })
+        .catch((reclaimError) => {
+          console.warn("Storage reclaim check failed:", reclaimError);
+        });
+    }, 30000);
   });
 
   emitter.on("camera:request-access", async () => {
