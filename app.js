@@ -2088,9 +2088,9 @@ export default function applicationStore(state, emitter) {
         emitter.emit("render");
       },
     })
-      .then(async ({ imported }) => {
+      .then(async ({ imported, removed }) => {
         state.backendPullStatus = null;
-        if (imported > 0) {
+        if (imported > 0 || removed > 0) {
           await reloadProjectsFromStorage();
         }
         emitter.emit("render");

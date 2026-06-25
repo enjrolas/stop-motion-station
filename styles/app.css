@@ -178,9 +178,32 @@ body {
   background: #3498db;
 }
 
-.debug-overlay {
+.debug-overlay-wrapper {
+  pointer-events: none;
+}
+
+.debug-overlay-banner {
   position: fixed;
   top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2001;
+  padding: 6px 0;
+  text-align: center;
+  background: #00ff9c;
+  color: #001a10;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: clamp(20px, 4vh, 44px);
+  font-weight: 800;
+  letter-spacing: 0.35em;
+  text-indent: 0.35em;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.debug-overlay {
+  position: fixed;
+  top: 64px;
   left: 0;
   z-index: 2000;
   max-width: 420px;

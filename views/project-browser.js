@@ -131,7 +131,9 @@ export default function projectBrowserView(state, emit) {
                   : html`
                     <div class="project-browser-thumbnail-placeholder">No frames yet</div>
                   `}
-                <h2 class="project-browser-tile-title">${tileViewModel.title}</h2>
+                ${state.isDebugViewEnabled
+                  ? html`<h2 class="project-browser-tile-title">${tileViewModel.title}</h2>`
+                  : null}
               </article>
             `;
           })}

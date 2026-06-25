@@ -651,16 +651,21 @@ class SyncService {
     return { ok: failed === 0, restored, failed, total: restoreTasks.length };
   }
 
-  // Pulls this table's projects from the backend into local OPFS so a fresh /
-  // empty storage partition (any browser with the same API key) converges to the
-  // server's set. Additive only: it imports projects not already represented
-  // locally (tracked by remote id in the sync map) and never overwrites or
-  // deletes existing local data. Returns how many projects were imported.
+  // Reconciles local projects against the backend's project list so any browser
+  // with the same API key converges to the server's set:
+  //   - imports server projects not present locally (additive), and
+  //   - deletes local projects that were removed on the backend (no longer in
+  //     the list), per "the server is the source of truth for which projects
+  //     exist".
+  // Only a project that was previously synced (has a remote id in the sync map)
+  // can be deleted this way — locally-created, not-yet-synced projects are never
+  // touched. Runs only on a successful list fetch; a failed/garbled response
+  // leaves local data alone.
   async pullProjectsFromBackend({ onProgress } = {}) {
     const isReady = await this.initialize();
 
     if (!isReady) {
-      return { imported: 0 };
+      return { imported: 0, removed: 0 };
     }
 
     let serverProjects;
@@ -668,24 +673,29 @@ class SyncService {
       serverProjects = await this.apiRequestJson("/projects/");
     } catch (listError) {
       console.warn("Could not list backend projects for pull:", listError);
-      return { imported: 0 };
+      return { imported: 0, removed: 0 };
     }
 
     if (!Array.isArray(serverProjects)) {
-      return { imported: 0 };
+      // Never delete local data on an unexpected (non-array) response.
+      return { imported: 0, removed: 0 };
     }
 
-    const knownRemoteIds = new Set();
-    for (const projectSyncEntry of Object.values(this.syncState.projects)) {
-      if (projectSyncEntry?.remoteId != null) {
-        knownRemoteIds.add(projectSyncEntry.remoteId);
-      }
-    }
+    const serverRemoteIds = new Set(
+      serverProjects.map((serverProject) => serverProject?.id).filter((id) => id != null),
+    );
 
+    // 1. Delete local projects the backend no longer has.
+    const removedCount = await this.deleteLocalProjectsMissingFromServer(serverRemoteIds);
+
+    // 2. Import server projects not yet present locally.
     let importedCount = 0;
-
     for (const serverProject of serverProjects) {
-      if (!serverProject || knownRemoteIds.has(serverProject.id)) {
+      if (!serverProject || serverRemoteIds.size === 0) {
+        continue;
+      }
+
+      if (this.isRemoteProjectMappedLocally(serverProject.id)) {
         continue;
       }
 
@@ -701,7 +711,68 @@ class SyncService {
       }
     }
 
-    return { imported: importedCount };
+    return { imported: importedCount, removed: removedCount };
+  }
+
+  isRemoteProjectMappedLocally(remoteId) {
+    for (const projectSyncEntry of Object.values(this.syncState.projects)) {
+      if (projectSyncEntry?.remoteId === remoteId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Deletes every local project that was previously synced (has a remote id) but
+  // whose remote id is absent from the current server list — i.e. it was deleted
+  // on the backend. Returns the number removed.
+  async deleteLocalProjectsMissingFromServer(serverRemoteIds) {
+    const localProjectIdsToDelete = [];
+    for (const [localProjectId, projectSyncEntry] of Object.entries(this.syncState.projects)) {
+      if (projectSyncEntry?.remoteId == null) {
+        continue;
+      }
+      if (!serverRemoteIds.has(projectSyncEntry.remoteId)) {
+        localProjectIdsToDelete.push(localProjectId);
+      }
+    }
+
+    let removedCount = 0;
+    for (const localProjectId of localProjectIdsToDelete) {
+      await this.deleteLocalProjectCompletely(localProjectId);
+      delete this.syncState.projects[localProjectId];
+      removedCount += 1;
+    }
+
+    if (removedCount > 0) {
+      await this.saveSyncState();
+    }
+
+    return removedCount;
+  }
+
+  // Removes a local project entirely: its frame images, content file, and
+  // metadata entry. Best-effort; missing pieces are ignored.
+  async deleteLocalProjectCompletely(projectId) {
+    try {
+      const loadedProject = await projectStorageService.loadProject({ projectId });
+      for (const frameRecord of loadedProject.frames ?? []) {
+        if (frameRecord?.originalStorageKey) {
+          await frameStorageService
+            .deleteOriginalFrame({ storageKey: frameRecord.originalStorageKey })
+            .catch(() => {});
+        }
+        if (frameRecord?.thumbnailStorageKey) {
+          await frameStorageService
+            .deleteThumbnailFrame({ storageKey: frameRecord.thumbnailStorageKey })
+            .catch(() => {});
+        }
+      }
+    } catch {
+      // Content file already gone — fall through to remove any metadata entry.
+    }
+
+    await projectStorageService.deleteProject({ projectId }).catch(() => {});
   }
 
   // Creates a local project mirroring a server project: downloads each frame's

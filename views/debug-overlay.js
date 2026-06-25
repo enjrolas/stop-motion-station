@@ -46,7 +46,9 @@ export default function debugOverlay(state) {
   const backendPullStatus = state.backendPullStatus;
 
   return html`
-    <div class="debug-overlay">
+    <div class="debug-overlay-wrapper">
+      <div class="debug-overlay-banner">DEBUG</div>
+      <div class="debug-overlay">
       <div class="debug-overlay-title">Debug view · press "d" to close</div>
       ${debugRow("App mode", state.appMode)}
       ${debugRow("Projects", String(state.projects?.length ?? 0))}
@@ -67,6 +69,7 @@ export default function debugOverlay(state) {
           ? `${frameRestoreStatus.restored ?? 0}/${frameRestoreStatus.total ?? 0}${frameRestoreStatus.failed ? " (failed)" : ""}`
           : "idle",
       )}
+      </div>
     </div>
   `;
 }
