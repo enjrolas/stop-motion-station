@@ -2085,6 +2085,11 @@ export default function applicationStore(state, emitter) {
     syncService.pullProjectsFromBackend({
       onProgress: ({ imported, total }) => {
         state.backendPullStatus = { active: true, imported, total };
+        // Surface each imported project in the browser as soon as it lands,
+        // rather than waiting for the whole pull to finish.
+        reloadProjectsFromStorage()
+          .then(() => emitter.emit("render"))
+          .catch(() => {});
         emitter.emit("render");
       },
     })
