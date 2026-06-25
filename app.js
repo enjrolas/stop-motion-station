@@ -6,6 +6,8 @@ import frameStorageService, {
 } from "./services/frame-storage-service.js";
 import playbackController from "./services/playback-controller.js";
 import projectStorageService from "./services/project-storage-service.js";
+import syncService from "./services/sync-service.js";
+import videoExportService from "./services/video-export-service.js";
 import computeLayout from "./helpers/compute-layout.js";
 import createFrameId from "./helpers/create-frame-id.js";
 import {
@@ -329,6 +331,7 @@ function adjustPlaybackSpeedFromShortcut({ state, emitter, controllerState, adju
 }
 
 function handleShortcutPress({ state, emitter, controllerState, shortcut, log }) {
+  state.lastUiActivityAtMilliseconds = performance.now();
   controllerState.currentlyPressedKeys.add(shortcut.pressedKey);
 
   log("shortcut press", {
@@ -550,6 +553,7 @@ function handleShortcutPress({ state, emitter, controllerState, shortcut, log })
 }
 
 function handleShortcutRelease({ state, emitter, controllerState, shortcut, log }) {
+  state.lastUiActivityAtMilliseconds = performance.now();
   controllerState.currentlyPressedKeys.delete(shortcut.pressedKey);
 
   if (state.appMode !== "project-editor") {
@@ -1062,6 +1066,15 @@ export default function applicationStore(state, emitter) {
 
     state.currentProjectTitle = updatedProjectMetadata.title;
     await reloadProjectsFromStorage();
+    requestProjectBackendSync(state.currentProjectId);
+  }
+
+  function requestProjectBackendSync(projectId) {
+    if (!projectId || !syncService.isEnabled()) {
+      return;
+    }
+
+    syncService.requestProjectSync(projectId);
   }
 
   function createCurrentProjectPersistenceSnapshot() {
@@ -1119,6 +1132,7 @@ export default function applicationStore(state, emitter) {
         }
 
         await reloadProjectsFromStorage();
+        requestProjectBackendSync(updatedProjectMetadata.id);
         emitter.emit("render");
       })
       .catch((projectPersistenceError) => {
@@ -1393,6 +1407,7 @@ export default function applicationStore(state, emitter) {
     });
     state.projectBrowserModalStatusMessage = "Project title updated.";
     clearProjectBrowserTitleEditor();
+    requestProjectBackendSync(selectedProjectMetadata.id);
   }
 
   function moveProjectBrowserTitleKeyboardSelectionByOffset(offset) {
@@ -1532,6 +1547,9 @@ export default function applicationStore(state, emitter) {
       projectId: selectedProjectMetadata.id,
     });
     await reloadProjectsFromStorage();
+    // Drop local sync bookkeeping for the removed project. The backend has no
+    // project-delete endpoint, so the remote copy is intentionally left in place.
+    requestProjectBackendSync(selectedProjectMetadata.id);
     state.projectBrowserModalProjectId = null;
     state.projectBrowserModalSelectedActionIndex = 0;
     state.projectBrowserModalStatusMessage = null;
@@ -1701,6 +1719,7 @@ export default function applicationStore(state, emitter) {
     state.selectedTimelineItem = insertionResult.selectedTimelineItem;
     updateTimelineScrollTargetAndClampCurrentOffset();
     animateTimelineScrollOffsetTowardsTargetIfNeeded();
+    videoExportService.notifyFramesChanged(state.currentProjectId);
 
     return insertionResult;
   }
@@ -1947,6 +1966,43 @@ export default function applicationStore(state, emitter) {
     clearProjectBrowserPlaybackState();
     state.appMode = "project-browser";
     emitter.emit("render");
+
+    syncService.setStatusListener((nextSyncStatus) => {
+      state.syncStatus = nextSyncStatus;
+      emitter.emit("render");
+    });
+
+    // Push every locally saved project to the backend, then keep syncing as the
+    // user makes progress (wired into the persistence paths above).
+    syncService.requestFullSync().catch((fullSyncError) => {
+      console.warn("Initial backend sync could not start:", fullSyncError);
+    });
+
+    videoExportService.setStatusListener((nextVideoExportStatus) => {
+      state.videoExportStatus = nextVideoExportStatus;
+      emitter.emit("render");
+    });
+
+    // Low-priority background video render: once per second, check whether the
+    // editor has been idle long enough to encode the current project off-thread.
+    window.setInterval(() => {
+      if (state.appMode !== "project-editor" || !state.currentProjectId) {
+        return;
+      }
+
+      videoExportService.maybeEncodeOnIdle({
+        projectId: state.currentProjectId,
+        frames: state.frames,
+        framesPerSecond: state.playbackFramesPerSecond,
+        isPlaying: state.isPlaying,
+        isTimelapseCapturing: state.isTimelapseCapturing,
+        isCaptureInProgress: state.isCaptureOperationInProgress,
+        nowMilliseconds: performance.now(),
+        lastActivityAtMilliseconds: state.lastUiActivityAtMilliseconds,
+      }).catch((idleEncodeCheckError) => {
+        console.warn("Idle video encode check failed:", idleEncodeCheckError);
+      });
+    }, 1000);
   });
 
   emitter.on("camera:request-access", async () => {
@@ -2335,6 +2391,7 @@ export default function applicationStore(state, emitter) {
     state.selectedTimelineItem = movementResult.selectedTimelineItem;
     updateTimelineScrollTargetAndClampCurrentOffset();
     animateTimelineScrollOffsetTowardsTargetIfNeeded();
+    videoExportService.notifyFramesChanged(state.currentProjectId);
     await persistCurrentProjectState();
     emitter.emit("render");
   });
@@ -2358,6 +2415,7 @@ export default function applicationStore(state, emitter) {
     state.selectedTimelineItem = movementResult.selectedTimelineItem;
     updateTimelineScrollTargetAndClampCurrentOffset();
     animateTimelineScrollOffsetTowardsTargetIfNeeded();
+    videoExportService.notifyFramesChanged(state.currentProjectId);
     await persistCurrentProjectState();
     emitter.emit("render");
   });
@@ -2468,6 +2526,7 @@ export default function applicationStore(state, emitter) {
     state.selectedTimelineItem = deletionResult.selectedTimelineItem;
     updateTimelineScrollTargetAndClampCurrentOffset();
     animateTimelineScrollOffsetTowardsTargetIfNeeded();
+    videoExportService.notifyFramesChanged(state.currentProjectId);
 
     try {
       await cleanupDeletedFrameAssets(deletionResult.deletedFrameRecord);

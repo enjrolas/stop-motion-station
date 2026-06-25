@@ -92,6 +92,76 @@ Use this checklist after application changes:
 12. Reopen the project and confirm its frames are still available.
 13. Delete the project from the project browser action dialog.
 
+## Backend sync
+
+Projects and their captured frames can be pushed to the Stop Motion Bible
+Stories backend gallery (`https://smbs.artiswrong.com`). Sync is **one-way
+(upload only)**: the browser's Origin Private File System remains the source of
+truth, and local changes are mirrored up to the server.
+
+### Setup
+
+1. Copy the config template and add the table API key issued for this device:
+
+   ```sh
+   cp sync-config.example.js sync-config.js
+   ```
+
+   ```js
+   // sync-config.js  (gitignored — never commit the key)
+   export default {
+     apiKey: "your-table-api-key-here",
+     apiBaseUrl: "https://smbs.artiswrong.com/api",
+   };
+   ```
+
+2. Reload the app. The project browser and editor show a "Backend sync"
+   indicator (ready / syncing / synced / retrying). Set `apiKey` to `null` to
+   disable sync; the app runs normally offline.
+
+### Behavior
+
+- On startup every saved project is pushed; afterwards each capture, reorder,
+  delete, and title edit triggers a debounced background sync.
+- Each project is created once on the server (a stable per-device `user_id` is
+  generated and stored in `localStorage`). Frames are uploaded by 1-based
+  timeline position, so reorders and replacements re-upload the affected
+  positions and local deletions remove the trailing remote frames.
+- Sync bookkeeping (the local→remote id map and uploaded-frame positions) is
+  kept in an OPFS `sync-state.json` file and survives reloads.
+- Failed network calls do not block capture; the queue retries automatically.
+- A heartbeat checks once a minute and, if anything is not confirmed synced,
+  re-enqueues every project and retries — covering transient outages.
+- The backend has no project-delete endpoint, so deleting a project locally
+  only forgets its sync bookkeeping — the remote copy is left in place.
+
+### Background video export
+
+When backend sync is enabled, projects are also rendered to an MP4 and uploaded
+to the backend `video` endpoint. Rendering is deliberately **low priority** so it
+never competes with capture or playback:
+
+- Encoding runs in a dedicated Web Worker (`services/video-export-worker.js`)
+  using the **WebCodecs** `VideoEncoder` and an MP4 muxer (`lib/mp4-muxer.mjs`).
+  The main UI thread is never blocked.
+- A render only starts after the editor has been **idle for 5 seconds** (no
+  keyboard or gamepad input) and never while playing, capturing, or running a
+  timelapse. Any frame change cancels an in-flight render so stale video is not
+  uploaded.
+- Each project's frame order + playback speed forms a signature; a project is
+  only re-encoded when that signature changes since the last successful upload
+  (tracked in OPFS `video-export-state.json`).
+- The finished MP4 is uploaded via the project's `video` endpoint, and frame
+  edits call `video/mark-changed` so the backend knows the stored film is stale
+  until the next render lands.
+- WebCodecs H.264 encoding requires a supported (ideally hardware) encoder. If
+  it is unavailable the app degrades gracefully and simply skips video export;
+  frame sync is unaffected. Verify on the Raspberry Pi target.
+
+The encode tuning (idle threshold, minimum frame count) lives in the pure,
+unit-tested `helpers/video-export-policy.js`. The project-browser "Export Video"
+button remains a manual stub for now; background export is automatic.
+
 ## Raspberry Pi direction
 
 The intended deployment target is a Raspberry Pi with a Raspberry Pi Camera running Chromium in kiosk mode. See `raspberry-pi/README.md` for the setup sequence and the scripts that install the kiosk launcher pieces.

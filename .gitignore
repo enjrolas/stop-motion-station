@@ -1,0 +1,5 @@
+# Local backend sync credentials. Never commit the API key.
+sync-config.js
+
+# OS / editor noise
+.DS_Store

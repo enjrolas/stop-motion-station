@@ -1,5 +1,61 @@
+export function describeSyncStatus(syncStatus) {
+  if (!syncStatus || !syncStatus.enabled) {
+    return { label: "Sync off", detail: "Backend sync is not configured.", stateClassName: "is-disabled" };
+  }
+
+  const pendingSuffix = syncStatus.pendingProjectCount > 0
+    ? ` (${syncStatus.pendingProjectCount} pending)`
+    : "";
+
+  if (syncStatus.state === "syncing") {
+    return { label: `Syncing…${pendingSuffix}`, detail: syncStatus.message, stateClassName: "is-syncing" };
+  }
+
+  if (syncStatus.state === "error") {
+    return {
+      label: `Sync retrying${pendingSuffix}`,
+      detail: syncStatus.lastErrorMessage ?? syncStatus.message,
+      stateClassName: "is-error",
+    };
+  }
+
+  if (syncStatus.state === "synced") {
+    return { label: "Synced", detail: "All changes saved to the backend.", stateClassName: "is-synced" };
+  }
+
+  return { label: "Sync ready", detail: syncStatus.message, stateClassName: "is-ready" };
+}
+
+export function describeVideoExportStatus(videoExportStatus) {
+  const exportState = videoExportStatus?.state ?? "idle";
+
+  if (exportState === "rendering") {
+    return { label: "Rendering video…", stateClassName: "is-syncing" };
+  }
+
+  if (exportState === "uploading") {
+    return { label: "Uploading video…", stateClassName: "is-syncing" };
+  }
+
+  if (exportState === "uploaded") {
+    return { label: "Video synced", stateClassName: "is-synced" };
+  }
+
+  if (exportState === "error") {
+    return { label: "Video render retrying", stateClassName: "is-error" };
+  }
+
+  if (exportState === "unsupported") {
+    return { label: "Video export unsupported", stateClassName: "is-disabled" };
+  }
+
+  return { label: "Video idle", stateClassName: "is-ready" };
+}
+
 export default function controlsPanel(state) {
   const { controlsWidth, previewHeight } = state.appSurfaceLayout;
+  const syncStatusDescription = describeSyncStatus(state.syncStatus);
+  const videoExportStatusDescription = describeVideoExportStatus(state.videoExportStatus);
   const automaticCaptureIsEnabled = state.isTimelapseCapturing;
   const automaticCaptureStatusMessage = automaticCaptureIsEnabled
     ? `Taking picture in ${state.autoCaptureCountdownSecondsRemaining ?? 3}...`
@@ -33,6 +89,20 @@ export default function controlsPanel(state) {
         <div class="playback-speed-title">Playback speed</div>
         <div class="playback-speed-value">${state.playbackFramesPerSecond} fps</div>
       </section>
+      ${state.syncStatus?.enabled
+        ? html`
+          <section class="backend-sync-panel">
+            <div class="backend-sync-title">Backend sync</div>
+            <div class=${`backend-sync-state ${syncStatusDescription.stateClassName}`}>
+              ${syncStatusDescription.label}
+            </div>
+            <div class="backend-sync-detail">${syncStatusDescription.detail}</div>
+            <div class=${`backend-sync-state ${videoExportStatusDescription.stateClassName}`}>
+              ${videoExportStatusDescription.label}
+            </div>
+          </section>
+        `
+        : null}
       <section class="keyboard-controls-panel">
         <div class="keyboard-controls-title">Controls</div>
         <ul class="keyboard-controls-list">

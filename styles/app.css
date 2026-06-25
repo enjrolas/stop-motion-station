@@ -135,7 +135,8 @@ body {
 }
 
 .capture-readiness-indicator-panel,
-.playback-speed-panel {
+.playback-speed-panel,
+.backend-sync-panel {
   width: 100%;
   border: 1px solid #3b3b3b;
   border-radius: 8px;
@@ -148,10 +149,62 @@ body {
 }
 
 .capture-readiness-indicator-title,
-.playback-speed-title {
+.playback-speed-title,
+.backend-sync-title {
   color: #f1f1f1;
   font-size: clamp(14px, 2vh, 22px);
   font-weight: 700;
+}
+
+.backend-sync-state {
+  font-size: clamp(12px, 1.7vh, 17px);
+  font-weight: 700;
+}
+
+.backend-sync-state.is-synced,
+.backend-sync-state.is-ready {
+  color: #7dff83;
+}
+
+.backend-sync-state.is-syncing {
+  color: #80c7ff;
+}
+
+.backend-sync-state.is-error {
+  color: #ff8a80;
+}
+
+.backend-sync-state.is-disabled {
+  color: #b8b8b8;
+}
+
+.backend-sync-detail {
+  color: #e3e3e3;
+  font-size: clamp(11px, 1.6vh, 16px);
+  line-height: 1.4;
+}
+
+.project-browser-sync-status {
+  margin: 6px 0 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.project-browser-sync-status.is-synced,
+.project-browser-sync-status.is-ready {
+  color: #7dff83;
+}
+
+.project-browser-sync-status.is-syncing {
+  color: #80c7ff;
+}
+
+.project-browser-sync-status.is-error {
+  color: #ff8a80;
+}
+
+.project-browser-sync-status.is-disabled {
+  color: #b8b8b8;
 }
 
 .capture-readiness-state {
