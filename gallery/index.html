@@ -39,20 +39,35 @@
       position: relative; aspect-ratio: 16 / 10; border-radius: 10px; overflow: hidden;
       background: var(--panel) center / cover no-repeat; border: 1px solid var(--line);
       cursor: pointer; box-shadow: 0 2px 0 rgba(0, 0, 0, .35);
+      /* Allow vertical scrolling over tiles while we handle long-press/tap
+         ourselves, and suppress the iOS long-press callout / text selection. */
+      touch-action: pan-y;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
     }
     .tile.no-video { cursor: default; }
     .tile video {
       position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
       opacity: 0; transition: opacity .25s;
     }
-    .tile:hover video { opacity: 1; }
+    .tile.is-pressing video { opacity: 1; }
     .tile .cap {
       position: absolute; inset: auto 0 0 0; z-index: 2; padding: 30px 12px 10px;
       color: #fff; font-weight: 600; font-size: .98rem; line-height: 1.2;
       background: linear-gradient(transparent, rgba(0, 0, 0, .78));
       opacity: 0; transform: translateY(6px); transition: opacity .25s, transform .25s;
     }
-    .tile:hover .cap { opacity: 1; transform: none; }
+    .tile.is-pressing .cap { opacity: 1; transform: none; }
+
+    /* Hover reveals are desktop-only. On touch devices (Android/iOS) a tap
+       leaves :hover stuck on the tile, which would pin the caption text open,
+       so we never apply hover styles where there's no real hover. Touch uses
+       long-press (.is-pressing) instead. */
+    @media (hover: hover) and (pointer: fine) {
+      .tile:hover video { opacity: 1; }
+      .tile:hover .cap { opacity: 1; transform: none; }
+    }
     .badge {
       position: absolute; bottom: 8px; left: 8px; z-index: 2;
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .55rem;
@@ -94,7 +109,9 @@
         <h2 id="modal-title"></h2>
         <button class="modal-close" id="modal-close" aria-label="Close">×</button>
       </div>
-      <video id="modal-video" controls autoplay loop playsinline></video>
+      <video id="modal-video" controls autoplay loop playsinline
+             controlslist="nodownload noplaybackrate noremoteplayback"
+             disablepictureinpicture></video>
     </div>
   </div>
 
@@ -128,6 +145,7 @@
       modalVideo.removeAttribute("src");
       modalVideo.load();
     }
+    modalVideo.addEventListener("contextmenu", (event) => event.preventDefault());
     document.getElementById("modal-close").addEventListener("click", closeModal);
     modal.addEventListener("click", (event) => { if (event.target === modal) closeModal(); });
     document.addEventListener("keydown", (event) => {
@@ -148,12 +166,86 @@
         video.loop = true;
         video.playsInline = true;
         video.preload = "none";
+        // Discourage the browser's "save/download video" affordances.
+        video.setAttribute("controlslist", "nodownload noplaybackrate noremoteplayback");
+        video.disablePictureInPicture = true;
         if (project.poster) video.poster = project.poster;
         tile.appendChild(video);
 
+        // Android/iOS show a download/save context menu on long-press of a
+        // <video>; long-press is our play gesture, so suppress that menu.
+        tile.addEventListener("contextmenu", (event) => event.preventDefault());
+
+        // Desktop: hover plays, click opens the full-res modal.
         tile.addEventListener("mouseenter", () => { video.play().catch(() => {}); });
         tile.addEventListener("mouseleave", () => { video.pause(); video.currentTime = 0; });
         tile.addEventListener("click", () => openModal(project.video, project.title));
+
+        // Touch: long-press plays the animation while the finger is held down;
+        // a short tap opens the full-res modal. A finger drag (scroll) cancels.
+        const LONG_PRESS_MS = 300;
+        const MOVE_CANCEL_PX = 12;
+        let longPressTimer = null;
+        let longPressActive = false;
+        let touchStartX = 0;
+        let touchStartY = 0;
+
+        function stopHeldPlayback() {
+          tile.classList.remove("is-pressing");
+          video.pause();
+          video.currentTime = 0;
+        }
+
+        function cancelLongPress() {
+          if (longPressTimer !== null) {
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+          }
+          if (longPressActive) {
+            longPressActive = false;
+            stopHeldPlayback();
+          }
+        }
+
+        tile.addEventListener("touchstart", (event) => {
+          const touch = event.touches[0];
+          touchStartX = touch.clientX;
+          touchStartY = touch.clientY;
+          longPressActive = false;
+          longPressTimer = setTimeout(() => {
+            longPressTimer = null;
+            longPressActive = true;
+            tile.classList.add("is-pressing");
+            video.play().catch(() => {});
+          }, LONG_PRESS_MS);
+        }, { passive: true });
+
+        tile.addEventListener("touchmove", (event) => {
+          const touch = event.touches[0];
+          if (
+            Math.abs(touch.clientX - touchStartX) > MOVE_CANCEL_PX
+            || Math.abs(touch.clientY - touchStartY) > MOVE_CANCEL_PX
+          ) {
+            cancelLongPress(); // treat as a scroll, not a press
+          }
+        }, { passive: true });
+
+        tile.addEventListener("touchend", (event) => {
+          if (longPressTimer !== null) {
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+          }
+          // Suppress the synthetic mouse click/hover that follows a touch.
+          event.preventDefault();
+          if (longPressActive) {
+            longPressActive = false;
+            stopHeldPlayback();
+          } else {
+            openModal(project.video, project.title);
+          }
+        });
+
+        tile.addEventListener("touchcancel", cancelLongPress);
       } else {
         const badge = document.createElement("span");
         badge.className = "badge";
