@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Gallery · Stop Motion Station</title>
+  <style>
+    :root {
+      --bg: #0f0f10;
+      --panel: #1a1712;
+      --line: #2c2a26;
+      --ink: #f3e9d4;
+      --ink-soft: #9a917f;
+      --accent: #00ff9c;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      min-height: 100vh;
+    }
+
+    .gal-head { max-width: 1180px; margin: 0 auto; padding: 40px 28px 26px; }
+    .gal-head h1 { font-weight: 800; font-size: 2rem; margin: 0 0 4px; letter-spacing: -0.01em; }
+    .gal-head p {
+      margin: 0; color: var(--ink-soft);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: .7rem; letter-spacing: .14em; text-transform: uppercase;
+    }
+
+    .grid {
+      max-width: 1180px; margin: 0 auto; padding: 0 28px 60px;
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px;
+    }
+
+    .tile {
+      position: relative; aspect-ratio: 16 / 10; border-radius: 10px; overflow: hidden;
+      background: var(--panel) center / cover no-repeat; border: 1px solid var(--line);
+      cursor: pointer; box-shadow: 0 2px 0 rgba(0, 0, 0, .35);
+    }
+    .tile.no-video { cursor: default; }
+    .tile video {
+      position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+      opacity: 0; transition: opacity .25s;
+    }
+    .tile:hover video { opacity: 1; }
+    .tile .cap {
+      position: absolute; inset: auto 0 0 0; z-index: 2; padding: 30px 12px 10px;
+      color: #fff; font-weight: 600; font-size: .98rem; line-height: 1.2;
+      background: linear-gradient(transparent, rgba(0, 0, 0, .78));
+      opacity: 0; transform: translateY(6px); transition: opacity .25s, transform .25s;
+    }
+    .tile:hover .cap { opacity: 1; transform: none; }
+    .badge {
+      position: absolute; bottom: 8px; left: 8px; z-index: 2;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .55rem;
+      letter-spacing: .1em; text-transform: uppercase; padding: 3px 7px; border-radius: 99px;
+      background: rgba(0, 0, 0, .6); color: #fff;
+    }
+
+    .status {
+      max-width: 1180px; margin: 60px auto; padding: 0 28px; text-align: center;
+      color: var(--ink-soft); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      letter-spacing: .08em;
+    }
+
+    /* full-res modal */
+    .modal {
+      position: fixed; inset: 0; z-index: 50; display: none; align-items: center; justify-content: center;
+      background: rgba(8, 8, 8, .88); padding: 28px;
+    }
+    .modal.open { display: flex; }
+    .modal-inner { max-width: min(960px, 92vw); width: 100%; }
+    .modal-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; color: var(--ink); gap: 16px; }
+    .modal-bar h2 { font-weight: 600; font-size: 1.2rem; margin: 0; }
+    .modal-close { cursor: pointer; border: 0; background: transparent; color: var(--ink); font-size: 1.7rem; line-height: 1; }
+    .modal-inner video { width: 100%; max-height: 78vh; border-radius: 10px; background: #000; box-shadow: 0 18px 60px rgba(0, 0, 0, .6); }
+  </style>
+</head>
+<body>
+  <div class="gal-head">
+    <h1>Gallery</h1>
+    <p id="subtitle">Loading…</p>
+  </div>
+
+  <div class="grid" id="grid"></div>
+  <p class="status" id="status" hidden></p>
+
+  <div class="modal" id="modal" aria-hidden="true">
+    <div class="modal-inner">
+      <div class="modal-bar">
+        <h2 id="modal-title"></h2>
+        <button class="modal-close" id="modal-close" aria-label="Close">×</button>
+      </div>
+      <video id="modal-video" controls autoplay loop playsinline></video>
+    </div>
+  </div>
+
+  <script>
+    // Public gallery wall for one table's public projects. Hover a tile to play
+    // its rendered video; click to open it full-resolution in a modal. Data comes
+    // from the backend's unauthenticated /api/gallery/<table>/ endpoint; frame and
+    // video URLs are public-read S3 objects loaded directly by the browser.
+    const API_BASE = "https://smbs.artiswrong.com/api";
+    const TABLE_DEVICE_ID = "kaleidoscope";
+
+    const grid = document.getElementById("grid");
+    const subtitle = document.getElementById("subtitle");
+    const statusLine = document.getElementById("status");
+
+    const modal = document.getElementById("modal");
+    const modalVideo = document.getElementById("modal-video");
+    const modalTitle = document.getElementById("modal-title");
+
+    function openModal(src, title) {
+      modalVideo.src = src;
+      modalTitle.textContent = title || "";
+      modal.classList.add("open");
+      modal.setAttribute("aria-hidden", "false");
+      modalVideo.play().catch(() => {});
+    }
+    function closeModal() {
+      modal.classList.remove("open");
+      modal.setAttribute("aria-hidden", "true");
+      modalVideo.pause();
+      modalVideo.removeAttribute("src");
+      modalVideo.load();
+    }
+    document.getElementById("modal-close").addEventListener("click", closeModal);
+    modal.addEventListener("click", (event) => { if (event.target === modal) closeModal(); });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && modal.classList.contains("open")) closeModal();
+    });
+
+    function renderTile(project) {
+      const tile = document.createElement("div");
+      tile.className = "tile" + (project.video ? "" : " no-video");
+      if (project.poster) {
+        tile.style.backgroundImage = `url('${project.poster}')`;
+      }
+
+      if (project.video) {
+        const video = document.createElement("video");
+        video.src = project.video;
+        video.muted = true;
+        video.loop = true;
+        video.playsInline = true;
+        video.preload = "none";
+        if (project.poster) video.poster = project.poster;
+        tile.appendChild(video);
+
+        tile.addEventListener("mouseenter", () => { video.play().catch(() => {}); });
+        tile.addEventListener("mouseleave", () => { video.pause(); video.currentTime = 0; });
+        tile.addEventListener("click", () => openModal(project.video, project.title));
+      } else {
+        const badge = document.createElement("span");
+        badge.className = "badge";
+        badge.textContent = "No video yet";
+        tile.appendChild(badge);
+      }
+
+      const cap = document.createElement("span");
+      cap.className = "cap";
+      cap.textContent = project.title || "Untitled";
+      tile.appendChild(cap);
+
+      return tile;
+    }
+
+    async function loadGallery() {
+      try {
+        const response = await fetch(`${API_BASE}/gallery/${encodeURIComponent(TABLE_DEVICE_ID)}/`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        const projects = payload.projects || [];
+
+        if (projects.length === 0) {
+          subtitle.textContent = "No films yet";
+          statusLine.hidden = false;
+          statusLine.textContent = "No public films yet.";
+          return;
+        }
+
+        subtitle.textContent =
+          `${projects.length} film${projects.length === 1 ? "" : "s"} · hover to play · click for full-res`;
+        for (const project of projects) {
+          grid.appendChild(renderTile(project));
+        }
+      } catch (error) {
+        subtitle.textContent = "Could not load gallery";
+        statusLine.hidden = false;
+        statusLine.textContent = "Could not reach the gallery server. Please try again later.";
+      }
+    }
+
+    loadGallery();
+  </script>
+</body>
+</html>
