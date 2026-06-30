@@ -12,6 +12,7 @@ import {
   insertCapturedFrameAtCurrentSelection,
   moveSelectedFrameByOffset,
   moveTimelineSelectionByOffset,
+  resolveTimelineScrollUpdate,
 } from "../helpers/frame-operations.js";
 import {
   computeRenderedTimelineRange,
@@ -180,4 +181,36 @@ test("ensureTimelineSelectionIsVisible keeps the timeline end at the right edge 
   });
 
   assert.equal(Math.round(scrollOffset), 26);
+});
+
+test("resolveTimelineScrollUpdate moves the scroll offset to the next target in one update", () => {
+  const scrollUpdate = resolveTimelineScrollUpdate({
+    selectedTimelineItem: { type: "gap", index: 8 },
+    currentTimelineScrollTargetOffsetInItemUnits: 0,
+    currentTimelineScrollOffsetInItemUnits: 0,
+    visibleTimelineItemCount: 9,
+    frameCount: 8,
+  });
+
+  assert.deepEqual(scrollUpdate, {
+    timelineScrollTargetOffsetInItemUnits: 8,
+    timelineScrollOffsetInItemUnits: 8,
+    timelineScrollShouldAnimate: true,
+  });
+});
+
+test("resolveTimelineScrollUpdate snaps large jumps that exceed the rendered window", () => {
+  const scrollUpdate = resolveTimelineScrollUpdate({
+    selectedTimelineItem: { type: "gap", index: 20 },
+    currentTimelineScrollTargetOffsetInItemUnits: 100,
+    currentTimelineScrollOffsetInItemUnits: 100,
+    visibleTimelineItemCount: 9,
+    frameCount: 20,
+  });
+
+  assert.deepEqual(scrollUpdate, {
+    timelineScrollTargetOffsetInItemUnits: 32,
+    timelineScrollOffsetInItemUnits: 32,
+    timelineScrollShouldAnimate: false,
+  });
 });

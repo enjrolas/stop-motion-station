@@ -34,6 +34,7 @@ export function createInitialApplicationState() {
     },
     timelineScrollOffsetInItemUnits: 0,
     timelineScrollTargetOffsetInItemUnits: 0,
+    timelineScrollShouldAnimate: false,
     visibleTimelineItemCount: 9,
     isPlaying: false,
     playbackFrameIndex: null,
@@ -85,6 +86,19 @@ function getSelectionPositionOnTimeline(selectedTimelineItem) {
     : (selectedTimelineItem.index * 2) + 1;
 }
 
+function getMaximumTimelineScrollOffset({
+  frameCount,
+  visibleTimelineItemCount,
+}) {
+  const safeVisibleTimelineItemCount = Math.max(1, visibleTimelineItemCount);
+  const maximumTimelinePosition = frameCount * 2;
+
+  return Math.max(
+    0,
+    (maximumTimelinePosition + 1) - safeVisibleTimelineItemCount,
+  );
+}
+
 export function ensureTimelineSelectionIsVisible({
   selectedTimelineItem,
   currentTimelineScrollOffsetInItemUnits,
@@ -93,11 +107,10 @@ export function ensureTimelineSelectionIsVisible({
 }) {
   const selectedTimelinePosition = getSelectionPositionOnTimeline(selectedTimelineItem);
   const safeVisibleTimelineItemCount = Math.max(1, visibleTimelineItemCount);
-  const maximumTimelinePosition = frameCount * 2;
-  const maximumTimelineScrollOffset = Math.max(
-    0,
-    (maximumTimelinePosition + 1) - safeVisibleTimelineItemCount,
-  );
+  const maximumTimelineScrollOffset = getMaximumTimelineScrollOffset({
+    frameCount,
+    visibleTimelineItemCount: safeVisibleTimelineItemCount,
+  });
   const currentVisibleTimelineStart = Math.max(0, currentTimelineScrollOffsetInItemUnits);
   const currentVisibleTimelineEnd = currentVisibleTimelineStart + safeVisibleTimelineItemCount - 1;
 
@@ -110,6 +123,37 @@ export function ensureTimelineSelectionIsVisible({
   }
 
   return Math.min(maximumTimelineScrollOffset, Math.max(0, nextTimelineScrollOffset));
+}
+
+// Resolve the next timeline scroll position in a single step. The visual easing
+// is done by a CSS transition on the scroll strip (see timeline-panel.js /
+// app.css), not a main-thread animation loop, so we just snap the offset to its
+// target here and report whether the move is small enough to animate. Large
+// jumps (e.g. opening a long project) snap without animation.
+export function resolveTimelineScrollUpdate({
+  selectedTimelineItem,
+  currentTimelineScrollTargetOffsetInItemUnits,
+  currentTimelineScrollOffsetInItemUnits,
+  visibleTimelineItemCount,
+  frameCount,
+}) {
+  const timelineScrollTargetOffsetInItemUnits = ensureTimelineSelectionIsVisible({
+    selectedTimelineItem,
+    currentTimelineScrollOffsetInItemUnits: currentTimelineScrollTargetOffsetInItemUnits,
+    visibleTimelineItemCount,
+    frameCount,
+  });
+  const scrollDistanceInItemUnits = Math.abs(
+    timelineScrollTargetOffsetInItemUnits - currentTimelineScrollOffsetInItemUnits,
+  );
+
+  return {
+    timelineScrollTargetOffsetInItemUnits,
+    timelineScrollOffsetInItemUnits: timelineScrollTargetOffsetInItemUnits,
+    timelineScrollShouldAnimate:
+      scrollDistanceInItemUnits > 0
+      && scrollDistanceInItemUnits <= Math.max(1, visibleTimelineItemCount),
+  };
 }
 
 function createFrameRecord({

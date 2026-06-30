@@ -116,6 +116,10 @@ export default function timelinePanel(state, emit) {
     Math.ceil(renderedTimelineRange.endPosition / 2),
   );
   const timelineItems = [];
+  const timelineStripClassName = [
+    "timeline-scroll-strip",
+    state.timelineScrollShouldAnimate ? "is-animated" : "",
+  ].filter(Boolean).join(" ");
 
   for (let gapIndex = firstRenderedGapIndex; gapIndex <= lastRenderedGapIndex; gapIndex += 1) {
     const gapTimelinePosition = gapIndex * 2;
@@ -127,7 +131,7 @@ export default function timelinePanel(state, emit) {
       timelineItems.push(html`
         <div
           class="timeline-item-slot"
-          style=${`left: ${calculateOffsetFromTimelineUnits(gapTimelinePosition) - timelineOffsetInPixels}px;`}
+          style=${`left: ${calculateOffsetFromTimelineUnits(gapTimelinePosition)}px;`}
         >
           ${renderGapButton(state, emit, gapIndex)}
         </div>
@@ -144,7 +148,7 @@ export default function timelinePanel(state, emit) {
         timelineItems.push(html`
           <div
             class="timeline-item-slot"
-            style=${`left: ${calculateOffsetFromTimelineUnits(frameTimelinePosition) - timelineOffsetInPixels}px;`}
+            style=${`left: ${calculateOffsetFromTimelineUnits(frameTimelinePosition)}px;`}
           >
             ${renderFrameButton(state, emit, state.frames[gapIndex], gapIndex)}
           </div>
@@ -155,7 +159,10 @@ export default function timelinePanel(state, emit) {
 
   return html`
     <section class="timeline-panel" style=${`width: ${width}px; height: ${timelineHeight}px;`}>
-      <div class="timeline-scroll-strip">
+      <div
+        class=${timelineStripClassName}
+        style=${`transform: translate3d(${-timelineOffsetInPixels}px, 0, 0);`}
+      >
         ${timelineItems}
       </div>
     </section>
