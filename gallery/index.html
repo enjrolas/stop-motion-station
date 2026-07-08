@@ -50,6 +50,13 @@
     .tile video {
       position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
       opacity: 0; transition: opacity .25s;
+      /* The tile div owns every gesture; the video is a pure visual layer we
+         drive from JS. Without this, a touch lands on the <video> itself and
+         the browser hijacks it into native media behavior — iOS opens the
+         fullscreen player, Android offers a download/save menu. Taking the
+         video out of hit-testing stops both. */
+      pointer-events: none;
+      -webkit-touch-callout: none;
     }
     .tile.is-pressing video { opacity: 1; }
     .tile .cap {
@@ -74,6 +81,20 @@
       letter-spacing: .1em; text-transform: uppercase; padding: 3px 7px; border-radius: 99px;
       background: rgba(0, 0, 0, .6); color: #fff;
     }
+
+    /* Explicit "open full-res" control. On touch the tile is hold-to-play, so
+       this button is the only way into the modal; it sits above the video
+       layer and stays tappable. */
+    .tile .expand {
+      position: absolute; top: 8px; right: 8px; z-index: 3;
+      display: flex; align-items: center; justify-content: center;
+      width: 34px; height: 34px; padding: 0; border: 0; border-radius: 8px;
+      color: #fff; background: rgba(0, 0, 0, .5); cursor: pointer;
+      -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
+      transition: background .2s;
+    }
+    .tile .expand:hover { background: rgba(0, 0, 0, .72); }
+    .tile .expand svg { width: 18px; height: 18px; display: block; }
 
     .status {
       max-width: 1180px; margin: 60px auto; padding: 0 28px; text-align: center;
@@ -164,8 +185,13 @@
         video.src = project.video;
         video.muted = true;
         video.loop = true;
-        video.playsInline = true;
         video.preload = "none";
+        // Keep playback inline on iOS Safari (otherwise it opens the native
+        // fullscreen player). Set both the standard and the -webkit- attribute
+        // as attributes, not just the IDL property, so older iOS honors it too.
+        video.playsInline = true;
+        video.setAttribute("playsinline", "");
+        video.setAttribute("webkit-playsinline", "");
         // Discourage the browser's "save/download video" affordances.
         video.setAttribute("controlslist", "nodownload noplaybackrate noremoteplayback");
         video.disablePictureInPicture = true;
@@ -176,13 +202,21 @@
         // <video>; long-press is our play gesture, so suppress that menu.
         tile.addEventListener("contextmenu", (event) => event.preventDefault());
 
-        // Desktop: hover plays, click opens the full-res modal.
-        tile.addEventListener("mouseenter", () => { video.play().catch(() => {}); });
-        tile.addEventListener("mouseleave", () => { video.pause(); video.currentTime = 0; });
-        tile.addEventListener("click", () => openModal(project.video, project.title));
+        // Desktop only (real hover + fine pointer): hover plays, click opens the
+        // full-res modal. On touch devices these are never attached, so a tap
+        // can't open the modal — touch is hold-to-play and nothing else. This
+        // mirrors the hover-only CSS above.
+        const isDesktopPointer =
+          window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+        if (isDesktopPointer) {
+          tile.addEventListener("mouseenter", () => { video.play().catch(() => {}); });
+          tile.addEventListener("mouseleave", () => { video.pause(); video.currentTime = 0; });
+          tile.addEventListener("click", () => openModal(project.video, project.title));
+        }
 
-        // Touch: long-press plays the animation while the finger is held down;
-        // a short tap opens the full-res modal. A finger drag (scroll) cancels.
+        // Touch: hold to play the animation while the finger is down; lifting
+        // the finger only stops playback — nothing else opens. A finger drag
+        // (scroll) cancels the press.
         const LONG_PRESS_MS = 300;
         const MOVE_CANCEL_PX = 12;
         let longPressTimer = null;
@@ -235,17 +269,41 @@
             clearTimeout(longPressTimer);
             longPressTimer = null;
           }
-          // Suppress the synthetic mouse click/hover that follows a touch.
+          // Lifting the finger does one thing: stop playback. It must not open
+          // the modal or anything else. preventDefault also suppresses the
+          // synthetic mouse click that follows a touch, which would otherwise
+          // fire the desktop click-to-modal handler below.
           event.preventDefault();
           if (longPressActive) {
             longPressActive = false;
             stopHeldPlayback();
-          } else {
-            openModal(project.video, project.title);
           }
         });
 
         tile.addEventListener("touchcancel", cancelLongPress);
+
+        // Explicit full-screen control — the only way into the modal on touch,
+        // where the tile itself is hold-to-play. Its touches are kept from
+        // bubbling to the tile so they don't start the hold-to-play gesture;
+        // the tap opens the modal via its own click.
+        const expand = document.createElement("button");
+        expand.type = "button";
+        expand.className = "expand";
+        expand.setAttribute("aria-label", "Open full screen");
+        expand.innerHTML =
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+          'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ' +
+          'aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3"/>' +
+          '<path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/>' +
+          '<path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>';
+        expand.addEventListener("click", (event) => {
+          event.stopPropagation();
+          openModal(project.video, project.title);
+        });
+        ["touchstart", "touchmove", "touchend"].forEach((type) => {
+          expand.addEventListener(type, (event) => event.stopPropagation());
+        });
+        tile.appendChild(expand);
       } else {
         const badge = document.createElement("span");
         badge.className = "badge";
